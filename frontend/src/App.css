@@ -1,0 +1,167 @@
+.app-shell {
+  min-height: 100vh;
+  padding: 32px 20px 48px;
+}
+
+.panel {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px;
+  border-radius: 28px;
+  background: rgba(255, 250, 243, 0.88);
+  border: 1px solid rgba(90, 66, 38, 0.12);
+  box-shadow: 0 24px 80px rgba(85, 54, 22, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.hero {
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #9a5c17;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  margin: 0;
+  color: #1f1308;
+  font-size: clamp(2.2rem, 6vw, 4.4rem);
+  line-height: 0.98;
+}
+
+.hero-copy {
+  max-width: 620px;
+  margin: 16px 0 0;
+  color: #5f4630;
+  font-size: 1.05rem;
+}
+
+.controls {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #4a3420;
+  font-weight: 600;
+}
+
+.input-group input {
+  width: 180px;
+  padding: 14px 16px;
+  border: 1px solid rgba(95, 70, 48, 0.2);
+  border-radius: 16px;
+  background: #fffdf8;
+  color: #1f1308;
+  font-size: 1rem;
+}
+
+.controls button {
+  padding: 14px 22px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #d2691e, #ff8c42);
+  color: #fff8f2;
+  font-weight: 700;
+  box-shadow: 0 16px 32px rgba(210, 105, 30, 0.26);
+}
+
+.controls button:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.controls .secondary-button {
+  background: #fff4e6;
+  color: #8c4d14;
+  box-shadow: none;
+  border: 1px solid rgba(154, 92, 23, 0.18);
+}
+
+.status {
+  margin: 12px 0 20px;
+  color: #5f4630;
+  font-weight: 500;
+}
+
+.status.error {
+  color: #a11d24;
+}
+
+.email-list {
+  display: grid;
+  gap: 16px;
+}
+
+.email-card {
+  padding: 20px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(95, 70, 48, 0.1);
+}
+
+.email-header {
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.email-header h2 {
+  margin: 0;
+  color: #22160c;
+  font-size: 1.2rem;
+}
+
+.email-badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #fff1df;
+  color: #9a5c17;
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.email-card p {
+  margin: 0;
+  color: #5f4630;
+}
+
+.attachments {
+  margin-top: 12px !important;
+  color: #7a5a3b !important;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 640px) {
+  .panel {
+    padding: 22px;
+    border-radius: 22px;
+  }
+
+  .controls {
+    align-items: stretch;
+  }
+
+  .input-group input,
+  .controls button {
+    width: 100%;
+  }
+
+  .email-header {
+    flex-direction: column;
+  }
+}

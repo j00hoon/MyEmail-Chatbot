@@ -27,10 +27,21 @@ def get_service():
             
     return build('gmail', 'v1', credentials=creds)
 
-def fetch_emails():
+def fetch_emails(max_results=10):
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError):
+        max_results = 10
+
+    max_results = max(1, min(max_results, 50))
+
     service = get_service()
-    # Primary 카테고리 메일만 최대 10개 필터링
-    results = service.users().messages().list(userId='me', q='category:primary', maxResults=10).execute()
+    # Primary 카테고리 메일만 최대 max_results개 필터링
+    results = service.users().messages().list(
+        userId='me',
+        q='category:primary',
+        maxResults=max_results
+    ).execute()
     messages = results.get('messages', [])
     
     parsed_emails = []

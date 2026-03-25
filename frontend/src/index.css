@@ -1,0 +1,28 @@
+:root {
+  font-family: "Segoe UI", "Noto Sans KR", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #20150c;
+  background:
+    radial-gradient(circle at top, rgba(255, 214, 153, 0.75), transparent 38%),
+    linear-gradient(160deg, #fff7ec 0%, #ffe4c2 45%, #ffd1b3 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
