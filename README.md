@@ -1,34 +1,165 @@
 # myEmail-chatbot
 
-Local-first Gmail RAG chatbot built for portfolio demos and future deployment.
+Local-first Gmail RAG chatbot for personal email search, sync, and AI chat.
 
-## What This Project Is Now
+This project is evolving toward a smarter Gmail search experience that can eventually outperform the default Gmail search UI for personal workflows.
 
-This project has been upgraded from a simple Gmail viewer into an MVP architecture for a personal Gmail chatbot:
+## Snapshot
+
+- Gmail sync with OAuth
+- Local metadata storage with SQLite
+- Local vector storage for retrieval
+- FastAPI backend
+- React frontend
+- Agent / skill / tool architecture
+- Purple AI workspace UI
+
+## Architecture
 
 ```text
 [Gmail API]
     ↓
 [Ingestion Agent]
     ↓
-[Metadata Store + Vector Store]
+[SQLite Metadata Store]
+[Local JSON Vector Store]
     ↓
-[Chat Agent (RAG)]
+[Hybrid Retrieval + Chat Agent]
     ↓
 [FastAPI Backend]
     ↓
 [React Frontend]
 ```
 
-## Tech Stack
+## Current Tech Stack
 
 - Backend: Python + FastAPI
 - Frontend: React + Vite
-- Metadata DB: SQLite for local MVP, designed so PostgreSQL can replace it later
-- Vector Store: local JSON vector index with OpenAI embeddings or local fallback embeddings
-- AI Layer: agent / skill / tool split inspired by modern agentic architecture
+- Metadata DB: SQLite
+- Vector Store: local JSON vector store
+- AI Integration: OpenAI API
 - Gmail Integration: Gmail API + OAuth
-- LLM: OpenAI GPT-5 family via environment variables
+- Retrieval: vector similarity + keyword matching
+
+## What It Can Do Right Now
+
+- Sync recent Gmail messages from `1` to `50`
+- Store subject, sender, body, snippet, and attachment names locally
+- Build embeddings and retrieval index
+- Ask natural-language questions over synced emails
+- Return source-backed answers in a web UI
+
+## Important Note About Storage
+
+You do **not** need to install PostgreSQL or any external database to run this version.
+
+This project currently stores data locally in:
+
+- `backend/data/metadata.db` for SQLite metadata
+- `backend/data/vector_store.json` for vector search data
+
+This makes the app easy to run locally for demos and portfolio use.
+
+## Quick Start
+
+### 1. Clone the repository
+
+```powershell
+git clone https://github.com/j00hoon/MyEmail-Chatbot.git
+cd MyEmail-Chatbot
+```
+
+### 2. Create the Python virtual environment
+
+```powershell
+python -m venv backend\venv
+.\backend\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+### 3. Install frontend dependencies
+
+```powershell
+cd frontend
+npm install
+cd ..
+```
+
+### 4. Add Gmail OAuth credentials
+
+Create a Google OAuth desktop app client in Google Cloud and place the downloaded file here:
+
+```text
+backend/credentials.json
+```
+
+When you sync Gmail for the first time, the app will open a browser login flow and generate:
+
+```text
+backend/token.json
+```
+
+### 5. Configure environment variables
+
+Use this file as a reference:
+
+```text
+backend/.env.example
+```
+
+Create your local runtime file here:
+
+```text
+backend/.env
+```
+
+Minimum recommended values:
+
+```text
+APP_ENV=local
+OPENAI_API_KEY=your_key_here
+OPENAI_CHAT_MODEL=gpt-5-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+DATABASE_URL=sqlite:///./data/metadata.db
+VECTOR_STORE_PATH=./data/vector_store.json
+GMAIL_CREDENTIALS_PATH=./credentials.json
+GMAIL_TOKEN_PATH=./token.json
+CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+```
+
+If `OPENAI_API_KEY` is missing, the app still works in fallback local retrieval mode, but answer quality may be lower.
+
+### 6. Start the app
+
+```powershell
+.\start-all.ps1
+```
+
+Local URLs:
+
+- Frontend: `http://127.0.0.1:5173`
+- Backend: `http://127.0.0.1:8000`
+
+### 7. Stop the app
+
+```powershell
+.\stop-all.ps1
+```
+
+## First Run Flow
+
+1. Start the app with `.\start-all.ps1`
+2. Open the frontend in the browser
+3. Click `Sync latest emails`
+4. Complete the Gmail OAuth login if prompted
+5. Wait for sync + indexing to finish
+6. Start asking questions in the chat UI
+
+## Main API Endpoints
+
+- `GET /api/health`
+- `POST /api/sync`
+- `GET /api/emails?limit=20`
+- `POST /api/chat`
 
 ## Project Structure
 
@@ -45,113 +176,69 @@ backend/
   schemas.py
 frontend/
   src/
+PROJECT_STATUS.md
+README.md
 ```
 
-## Agent / Skill / MCP Mapping
+## Agent / Skill / Tool Mapping
 
-- Sub Agents
-  - `IngestionAgent`: Gmail fetch + raw email persistence
-  - `IndexingAgent`: document building + embedding generation + vector indexing
-  - `ChatAgent`: retrieval + answer generation
-- Skills
-  - Gmail fetch
-  - text parsing
-  - embedding generation
-  - vector search
-  - answer generation
-- MCP-style tool layer
-  - Gmail API connector
-  - metadata database connector
-  - vector store connector
-  - local filesystem persistence
+### Agents
 
-This is implemented as a practical tool layer for local development, while keeping the structure easy to migrate to more formal MCP servers later.
+- `IngestionAgent`: fetches Gmail messages and saves raw metadata
+- `IndexingAgent`: parses messages, chunks content, creates embeddings, stores retrieval data
+- `ChatAgent`: retrieves relevant emails and generates final answers
 
-## MVP Features
+### Skills
 
-1. Sync recent Gmail messages from 1 to 50 emails
-2. Store subject, body, snippet, attachment names, and raw payload locally
-3. Generate embeddings and index emails for retrieval
-4. Ask questions in the web UI and get mailbox-grounded answers
+- Gmail fetch
+- text parsing
+- text chunking
+- embedding generation
+- vector search
+- answer generation
 
-## Local Run
+### Tools
 
-### 1. Install backend dependencies
+- Gmail API client
+- metadata store
+- vector store
+- local filesystem persistence
 
-```powershell
-python -m venv backend\venv
-.\backend\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-```
+## Current Limitations
 
-### 2. Install frontend dependencies
+- Redis cache is not implemented yet
+- Full mailbox sync is not implemented yet
+- Incremental sync via Gmail History API is not implemented yet
+- Browser extension is not implemented yet
+- Local JSON vector store is fine for MVP, but not ideal for large-scale indexing
 
-```powershell
-cd frontend
-npm install
-cd ..
-```
+## Recommended Next Upgrades
 
-### 3. Add Gmail OAuth credentials
+- Add Redis chat/search caching
+- Add full mailbox sync
+- Add Gmail incremental sync with `historyId`
+- Upgrade storage to PostgreSQL + pgvector or Qdrant
+- Build a Gmail browser extension sidebar
 
-Put your Google OAuth desktop app client file here:
+## Portfolio Positioning
 
-```text
-backend/credentials.json
-```
-
-On first Gmail sync, a browser login flow creates:
-
-```text
-backend/token.json
-```
-
-### 4. Optional: add OpenAI API key
-
-Use `backend/.env.example` as your local environment reference.
-
-Important variables:
-
-```text
-OPENAI_API_KEY=your_key_here
-OPENAI_CHAT_MODEL=gpt-5-mini
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-```
-
-If no OpenAI key is set, the app still works in fallback local retrieval mode.
-
-### 5. Start everything
-
-```powershell
-.\start-all.ps1
-```
-
-- Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5173`
-
-## API Endpoints
-
-- `GET /api/health`
-- `POST /api/sync`
-- `GET /api/emails?limit=20`
-- `POST /api/chat`
-
-## Portfolio Story
-
-This project is now shaped to demo:
+This project already demonstrates:
 
 - OAuth-based Gmail ingestion
-- agentic backend design
+- local-first AI architecture
 - RAG over personal data
-- local-first AI app architecture
-- React + FastAPI full-stack delivery
-- a clean path from local MVP to cloud deployment
+- React + FastAPI full-stack implementation
+- agent / skill / tool based backend structure
+- retrieval quality improvements beyond naive semantic search
 
-## Deployment Path Later
+## Session Continuity
 
-For production or interview demos on a live server, the natural upgrades are:
+If you want to continue the project later without losing context, read:
 
-- SQLite to PostgreSQL
-- local JSON vector store to Chroma or pgvector
-- local FastAPI server to Docker or cloud deployment
-- local `.env` secrets to hosted secret management
-- single-user OAuth flow to managed auth and multi-user isolation
+- [PROJECT_STATUS.md](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/PROJECT_STATUS.md)
+
+Suggested resume prompt:
+
+```text
+Read PROJECT_STATUS.md and continue from the current architecture.
+```
