@@ -3,6 +3,9 @@ backend/venv/
 backend/__pycache__/
 backend/token.json
 backend/credentials.json
+backend/.env
+backend/data/*
+!backend/data/.gitkeep
 
 # Node
 frontend/node_modules/

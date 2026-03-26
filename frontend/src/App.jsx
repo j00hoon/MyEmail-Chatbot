@@ -1,57 +1,172 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import axios from 'axios'
 import './App.css'
 
+const api = axios.create({
+  baseURL: 'http://127.0.0.1:8000',
+})
+
+const buildStatusCards = (health) => [
+  {
+    label: 'Run Mode',
+    value: health?.app_env || 'checking',
+    description: 'Current app runtime profile for this local workspace.',
+  },
+  {
+    label: 'AI Engine',
+    value: health?.openai_configured ? 'OpenAI connected' : 'Local fallback',
+    description: 'Shows whether GPT-powered generation is active or offline retrieval is used.',
+  },
+  {
+    label: 'Gmail Access',
+    value: health?.gmail_credentials_present ? 'OAuth ready' : 'Credentials missing',
+    description: 'Confirms whether Gmail OAuth files are available for mailbox sync.',
+  },
+]
+
+const quickPrompts = [
+  'What recruiter emails arrived this week?',
+  'Summarize interview follow-ups I should send.',
+  'Which emails include attachments I need to review?',
+]
+
 function App() {
+  const [health, setHealth] = useState(null)
   const [emails, setEmails] = useState([])
-  const [loading, setLoading] = useState(false)
   const [count, setCount] = useState(10)
+  const [chatInput, setChatInput] = useState('')
+  const [chatHistory, setChatHistory] = useState([])
+  const [syncing, setSyncing] = useState(false)
+  const [chatting, setChatting] = useState(false)
+  const [loadingEmails, setLoadingEmails] = useState(false)
+  const [status, setStatus] = useState('')
   const [error, setError] = useState('')
 
-  const handleFetchEmails = async () => {
-    const normalizedCount = Math.min(50, Math.max(1, Number(count) || 10))
+  const statusCards = buildStatusCards(health)
 
-    setCount(normalizedCount)
-    setLoading(true)
-    setError('')
+  const loadHealth = async () => {
+    const response = await api.get('/api/health')
+    setHealth(response.data)
+  }
 
+  const loadEmails = async () => {
+    setLoadingEmails(true)
     try {
-      const response = await axios.get(
-        `http://127.0.0.1:5000/api/emails?count=${normalizedCount}`,
-      )
+      const response = await api.get('/api/emails?limit=20')
       setEmails(Array.isArray(response.data) ? response.data : [])
-    } catch (err) {
-      const message =
-        err.response?.data?.error ||
-        err.message ||
-        'An error occurred while fetching emails.'
-      setEmails([])
-      setError(message)
     } finally {
-      setLoading(false)
+      setLoadingEmails(false)
     }
   }
 
-  const handleResetEmails = () => {
-    setEmails([])
+  useEffect(() => {
+    loadHealth().catch(() => {})
+    loadEmails().catch(() => {})
+  }, [])
+
+  const handleSync = async () => {
+    const normalizedCount = Math.min(50, Math.max(1, Number(count) || 10))
+    setCount(normalizedCount)
+    setSyncing(true)
     setError('')
-    setLoading(false)
+    setStatus('')
+
+    try {
+      const response = await api.post('/api/sync', { count: normalizedCount })
+      setStatus(response.data.message)
+      await loadHealth()
+      await loadEmails()
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Sync failed.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleAsk = async () => {
+    if (!chatInput.trim()) {
+      return
+    }
+
+    const question = chatInput.trim()
+    setChatHistory((current) => [...current, { role: 'user', text: question }])
+    setChatInput('')
+    setChatting(true)
+    setError('')
+
+    try {
+      const response = await api.post('/api/chat', { question, top_k: 4 })
+      setChatHistory((current) => [
+        ...current,
+        {
+          role: 'assistant',
+          text: response.data.answer,
+          sources: response.data.sources || [],
+        },
+      ])
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message || 'Chat request failed.'
+      setChatHistory((current) => [...current, { role: 'assistant', text: message }])
+      setError(message)
+    } finally {
+      setChatting(false)
+    }
   }
 
   return (
     <main className="app-shell">
-      <section className="panel">
-        <div className="hero">
-          <p className="eyebrow">Gmail Inbox Viewer</p>
-          <h1>Choose how many emails to load</h1>
+      <section className="hero-grid">
+        <article className="hero-card hero-main">
+          <div className="hero-topline">
+            <span className="hero-badge">Private Gmail Workspace</span>
+            <span className="hero-dot" />
+            <span className="hero-mini">local RAG system</span>
+          </div>
+          <h1>Turn your inbox into a searchable purple command center.</h1>
           <p className="hero-copy">
-            Connect to the Flask backend API and load your latest emails.
+            Sync recent Gmail threads, index them locally, and ask natural questions
+            through a cleaner personal AI workspace built for demos and iteration.
           </p>
-        </div>
+          <div className="hero-actions">
+            <button type="button" onClick={handleSync} disabled={syncing}>
+              {syncing ? 'Syncing and indexing...' : 'Sync latest emails'}
+            </button>
+            <div className="hero-chip">
+              <span>Indexed emails</span>
+              <strong>{emails.length}</strong>
+            </div>
+          </div>
+        </article>
 
-        <div className="controls">
+        <div className="status-bento">
+          {statusCards.map((item) => (
+            <article className="status-card" key={item.label}>
+              <p className="card-label">{item.label}</p>
+              <h2>{item.value}</h2>
+              <p className="card-copy">{item.description}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="workspace-grid">
+        <article className="panel panel-compact">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">Ingestion Agent</p>
+              <h2>Sync Settings</h2>
+            </div>
+            <span className="panel-badge">step 01</span>
+          </div>
+
+          <div className="sync-metric">
+            <span className="sync-metric-label">Next sync size</span>
+            <strong>{count}</strong>
+            <small>recent Gmail emails</small>
+          </div>
+
           <label className="input-group" htmlFor="count">
-            <span>Email Count</span>
+            <span>Recent email count</span>
             <input
               id="count"
               type="number"
@@ -62,44 +177,152 @@ function App() {
             />
           </label>
 
-          <button type="button" onClick={handleFetchEmails} disabled={loading}>
-            {loading ? 'Loading...' : 'Fetch Emails'}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={handleResetEmails}
-            disabled={loading && emails.length === 0}
-          >
-            Reset
-          </button>
+          <div className="sync-options">
+            <div className="mini-card">
+              <span>Storage</span>
+              <strong>SQLite + local vector index</strong>
+            </div>
+            <div className="mini-card">
+              <span>Mode</span>
+              <strong>{health?.openai_configured ? 'GPT-assisted RAG' : 'retrieval only'}</strong>
+            </div>
+          </div>
+
+          <p className="panel-copy">
+            Pull fresh Gmail messages, normalize content, then refresh the retrieval layer for chat.
+          </p>
+
+          {status ? <p className="status success">{status}</p> : null}
+          {error ? <p className="status error">{error}</p> : null}
+        </article>
+
+        <article className="panel panel-chat">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">Chat Agent</p>
+              <h2>Ask Your Inbox</h2>
+            </div>
+            <span className="panel-badge">step 02</span>
+          </div>
+
+          <div className="prompt-row">
+            {quickPrompts.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="prompt-chip"
+                onClick={() => setChatInput(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          <div className="chat-box">
+            {chatHistory.length === 0 ? (
+              <div className="empty-state">
+                <p>Try prompts like:</p>
+                <strong>Which recruiter emails need a reply this week?</strong>
+              </div>
+            ) : (
+              chatHistory.map((message, index) => (
+                <article
+                  key={`${message.role}-${index}`}
+                  className={`message-bubble ${message.role}`}
+                >
+                  <p className="message-role">{message.role}</p>
+                  <p>{message.text}</p>
+                  {message.sources?.length ? (
+                    <div className="source-list">
+                      {message.sources.map((source) => (
+                        <div
+                          key={`${source.gmail_message_id}-${source.subject}`}
+                          className="source-card"
+                        >
+                          <strong>{source.subject}</strong>
+                          <span>{source.sender || 'Unknown sender'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))
+            )}
+          </div>
+
+          <div className="chat-controls">
+            <textarea
+              rows="4"
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              placeholder="Summarize recruiter emails, interview follow-ups, or attachments I should review"
+            />
+            <div className="composer-row">
+              <p className="composer-hint">
+                Answers are grounded in indexed Gmail messages, not generic chat memory.
+              </p>
+              <button type="button" onClick={handleAsk} disabled={chatting}>
+                {chatting ? 'Thinking...' : 'Ask inbox'}
+              </button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="section-kicker">Indexed Metadata</p>
+            <h2>Stored Emails</h2>
+          </div>
+          <div className="stored-header-actions">
+            <div className="hero-chip">
+              <span>Visible</span>
+              <strong>{emails.length}</strong>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={loadEmails}
+              disabled={loadingEmails}
+            >
+              {loadingEmails ? 'Refreshing...' : 'Refresh list'}
+            </button>
+          </div>
         </div>
 
-        {error ? <p className="status error">{error}</p> : null}
-        {!error && loading ? (
-          <p className="status">Loading your email list...</p>
-        ) : null}
-        {!loading && !error && emails.length === 0 ? (
-          <p className="status">No emails have been loaded yet.</p>
-        ) : null}
-
         <div className="email-list">
-          {emails.map((email) => (
-            <article className="email-card" key={email.id}>
-              <div className="email-header">
-                <h2>{email.subject || 'No Subject'}</h2>
-                <span className="email-badge">
-                  Attachments {email.attachments?.length ?? 0}
-                </span>
-              </div>
-              <p>{email.snippet || 'No preview available.'}</p>
-              {email.attachments?.length ? (
-                <p className="attachments">
-                  Attachments: {email.attachments.join(', ')}
-                </p>
-              ) : null}
-            </article>
-          ))}
+          {emails.length === 0 ? (
+            <div className="empty-state">
+              <p>No emails indexed yet.</p>
+              <strong>Run sync first to fill your local knowledge base.</strong>
+            </div>
+          ) : (
+            emails.map((email) => (
+              <article className="email-card" key={email.gmail_message_id}>
+                <div className="email-header">
+                  <div>
+                    <p className="email-meta-label">Email record</p>
+                    <h3>{email.subject || 'No Subject'}</h3>
+                    <span>{email.sender || 'Unknown sender'}</span>
+                  </div>
+                  <span className="email-tag">
+                    {email.attachment_names?.length || 0} attachments
+                  </span>
+                </div>
+                <p>{email.snippet || email.body_text || 'No preview available.'}</p>
+                {email.attachment_names?.length ? (
+                  <p className="attachments">
+                    Attachments: {email.attachment_names.join(', ')}
+                  </p>
+                ) : null}
+                <div className="email-footer">
+                  <span className="email-id">ID {email.gmail_message_id.slice(0, 12)}</span>
+                  <span className="email-state">indexed locally</span>
+                </div>
+              </article>
+            ))
+          )}
         </div>
       </section>
     </main>

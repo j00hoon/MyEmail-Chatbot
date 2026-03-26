@@ -1,71 +1,87 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import redis
-import json
-from gmail_lib import fetch_emails
+from contextlib import asynccontextmanager
 
-app = Flask(__name__)
-CORS(app)  # React 프론트엔드와의 통신 허용
-            # Allow communication with the React frontend.
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
-# 1. Redis 연결 설정 (Docker로 띄운 기본 설정)
-# 1. Configure Redis connection (default settings running in Docker).
-# decode_responses=True를 설정해야 데이터를 문자열로 바로 읽을 수 있습니다.
-# decode_responses=True lets us read the data directly as strings.
-try:
-    cache = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-except Exception as e:
-    cache = None
-    print(f"Redis 연결 실패: {e}")
+from agents.chat_agent import ChatAgent
+from agents.indexing_agent import IndexingAgent
+from agents.ingestion_agent import IngestionAgent
+from config import settings
+from db import init_db
+from schemas import ChatRequest, ChatResponse, EmailRecordResponse, SyncRequest, SyncResponse
+from tools.metadata_store import MetadataStore
+from tools.vector_store import VectorStore
 
-@app.route('/api/emails', methods=['GET'])
-def get_gmail_data():
+
+metadata_store = MetadataStore(settings.database_url)
+vector_store = VectorStore(settings.vector_store_path)
+ingestion_agent = IngestionAgent(metadata_store=metadata_store)
+indexing_agent = IndexingAgent(metadata_store=metadata_store, vector_store=vector_store)
+chat_agent = ChatAgent(metadata_store=metadata_store, vector_store=vector_store)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db(settings.database_url)
+    yield
+
+
+app = FastAPI(
+    title="myEmail Chatbot API",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "ok",
+        "app_env": settings.app_env,
+        "openai_configured": bool(settings.openai_api_key),
+        "gmail_credentials_present": settings.credentials_path.exists(),
+        "database_url": settings.database_url,
+        "vector_store_path": str(settings.vector_store_path),
+    }
+
+
+@app.post("/api/sync", response_model=SyncResponse)
+def sync_gmail(payload: SyncRequest):
     try:
-        count = int(request.args.get('count', 10))
-    except (TypeError, ValueError):
-        return jsonify({"error": "count must be an integer."}), 400
+        emails = ingestion_agent.run(max_results=payload.count)
+        indexing_result = indexing_agent.run(email_ids=[email.id for email in emails])
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    if not 1 <= count <= 50:
-        return jsonify({"error": "count must be between 1 and 50."}), 400
+    return SyncResponse(
+        fetched_count=len(emails),
+        indexed_count=indexing_result.indexed_count,
+        saved_count=indexing_result.saved_count,
+        message="Gmail sync and indexing completed.",
+    )
 
-    cache_key = f'gmail_cache_{count}'
 
-    # 2. Redis 캐시 확인 (Key 이름: 개수별로 분리)
-    # 2. Check the Redis cache (separate key for each count).
-    cached_data = None
-    if cache:
-        try:
-            cached_data = cache.get(cache_key)
-        except Exception as e:
-            print(f"Redis 캐시 조회 실패: {e}")
-    
-    if cached_data:
-        # 캐시에 데이터가 있다면 즉시 반환 (Cache Hit)
-        # If cached data exists, return it immediately (cache hit).
-        print(f"💡 Redis Cache Hit! count={count} 데이터를 캐시에서 불러옵니다.")
-        return jsonify(json.loads(cached_data))
+@app.get("/api/emails", response_model=list[EmailRecordResponse])
+def list_emails(limit: int = Query(default=20, ge=1, le=50)):
+    return metadata_store.list_emails(limit=limit)
 
-    # 3. 캐시에 데이터가 없다면 (Cache Miss)
-    # 3. If there is no cached data (cache miss).
-    print(f"🚀 API Calling... Gmail에서 count={count} 데이터를 새로 가져옵니다.")
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat_with_mailbox(payload: ChatRequest):
     try:
-        data = fetch_emails(count)
-        
-        # 4. 가져온 데이터를 Redis에 저장 (SET)
-        # 4. Store the fetched data in Redis (SET).
-        # setex: 데이터 저장 + 유효기간 설정 (600초 = 10분)
-        # setex: save data and set an expiration time (600 seconds = 10 minutes).
-        if cache:
-            try:
-                cache.setex(cache_key, 600, json.dumps(data))
-            except Exception as e:
-                print(f"Redis 캐시 저장 실패: {e}")
-        
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    # Flask 서버 실행 (포트 5000)
-    # Run the Flask server (port 5000).
-    app.run(port=5000, debug=True)
+        result = chat_agent.run(question=payload.question, top_k=payload.top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return result
