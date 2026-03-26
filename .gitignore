@@ -1,6 +1,8 @@
 # Python
 backend/venv/
 backend/__pycache__/
+**/__pycache__/
+*.pyc
 backend/token.json
 backend/credentials.json
 backend/.env
