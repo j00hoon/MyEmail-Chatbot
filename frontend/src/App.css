@@ -280,6 +280,139 @@ body {
   margin-top: 14px;
 }
 
+.sync-live-card {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(123, 194, 255, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(125, 205, 255, 0.14), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+}
+
+.sync-live-header,
+.sync-stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-live-header {
+  margin-bottom: 14px;
+}
+
+.sync-live-header strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.08rem;
+  color: #eef6ff;
+}
+
+.sync-live-header span {
+  color: #b9d8ff;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.sync-live-detail {
+  margin: 14px 0 0;
+  color: #dbe7ff;
+  line-height: 1.55;
+}
+
+.sync-live-kicker {
+  margin: 0;
+  color: #8ed4ff;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+}
+
+.sync-progress-track {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sync-progress-bar {
+  position: absolute;
+  inset: 1px auto 1px 1px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8ad8ff 0%, #8b5cf6 55%, #d68cff 100%);
+  box-shadow: 0 0 22px rgba(117, 195, 255, 0.34);
+  transition: width 260ms ease;
+}
+
+.sync-stage-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.sync-stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.sync-stat-pill {
+  min-width: 88px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sync-stat-pill span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.77rem;
+  margin-bottom: 4px;
+}
+
+.sync-stat-pill strong {
+  color: #f4f8ff;
+  font-size: 1rem;
+}
+
+.sync-stage {
+  justify-content: flex-start;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+
+.sync-stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
+}
+
+.sync-stage.done {
+  color: #dfffee;
+}
+
+.sync-stage.done .sync-stage-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(118, 240, 194, 0.12);
+}
+
+.sync-stage.active {
+  color: #eef6ff;
+}
+
+.sync-stage.active .sync-stage-dot {
+  background: #8ed4ff;
+  box-shadow: 0 0 0 5px rgba(142, 212, 255, 0.14);
+}
+
 .mini-card {
   padding: 14px;
   border-radius: 18px;

@@ -40,6 +40,7 @@ This project is evolving toward a smarter Gmail search experience that can event
 - AI Integration: OpenAI API
 - Gmail Integration: Gmail API + OAuth
 - Retrieval: vector similarity + keyword matching
+- Cache: Redis chat response cache with sync-based invalidation
 
 ## What It Can Do Right Now
 
@@ -123,10 +124,17 @@ DATABASE_URL=sqlite:///./data/metadata.db
 VECTOR_STORE_PATH=./data/vector_store.json
 GMAIL_CREDENTIALS_PATH=./credentials.json
 GMAIL_TOKEN_PATH=./token.json
+REDIS_ENABLED=false
+REDIS_URL=redis://localhost:6379/0
+REDIS_CACHE_TTL_SECONDS=300
+REDIS_KEY_PREFIX=myemail
+DEFAULT_MAILBOX_ID=local_default
 CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 ```
 
 If `OPENAI_API_KEY` is missing, the app still works in fallback local retrieval mode, but answer quality may be lower.
+
+Redis caching is optional for local development. When enabled, chat responses are cached by mailbox version so a completed Gmail sync automatically invalidates older cached answers.
 
 ### 6. Start the app
 
@@ -206,15 +214,14 @@ README.md
 
 ## Current Limitations
 
-- Redis cache is not implemented yet
 - Full mailbox sync is not implemented yet
 - Incremental sync via Gmail History API is not implemented yet
 - Browser extension is not implemented yet
 - Local JSON vector store is fine for MVP, but not ideal for large-scale indexing
+- Redis is optional but recommended if you want faster repeated chat responses
 
 ## Recommended Next Upgrades
 
-- Add Redis chat/search caching
 - Add full mailbox sync
 - Add Gmail incremental sync with `historyId`
 - Upgrade storage to PostgreSQL + pgvector or Qdrant

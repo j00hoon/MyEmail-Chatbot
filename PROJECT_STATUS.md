@@ -44,8 +44,13 @@ Long term direction:
   - Gmail client
   - metadata store
   - vector store
+  - Redis cache store
+  - sync progress store
 - Gmail sync endpoint implemented
 - Chat endpoint implemented
+- Sync status endpoint implemented
+- Redis chat caching implemented
+- Cache invalidation after sync/index refresh implemented
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -63,17 +68,24 @@ Long term direction:
   - Gmail client
   - metadata store
   - vector store
+  - Redis cache store
+  - sync progress store
 - Gmail sync API 구현 완료
 - Chat API 구현 완료
+- Sync status API 구현 완료
+- Redis chat cache 구현 완료
+- sync/index refresh 후 cache invalidation 구현 완료
 
 ### Storage
 
 - Metadata is stored in local SQLite
 - Vector data is stored in local JSON vector store
+- Redis is used as an optional chat response cache layer
 - No external DB server is currently required
 
 - 메타데이터는 로컬 SQLite에 저장됨
 - 벡터 데이터는 로컬 JSON vector store에 저장됨
+- Redis는 선택적으로 사용할 수 있는 chat response cache 계층으로 추가됨
 - 현재는 외부 DB 서버 설치가 필요 없음
 
 ### Frontend
@@ -83,12 +95,14 @@ Long term direction:
 - Hero section rewritten
 - Sync / Chat / Stored Emails sections redesigned
 - User and assistant message colors are visually more distinct
+- Sync progress panel now shows live backend-driven stage/progress/count updates
 
 - React UI를 단순 이메일 리스트 뷰어에서 Gmail AI 워크스페이스 형태로 업그레이드함
 - 보라색 중심 테마 적용
 - 상단 Hero 문구 수정
 - Sync / Chat / Stored Emails 섹션 리디자인 완료
 - user / assistant 메시지 색상 구분 강화
+- Sync 진행 중 실제 backend 상태 기반 단계/진행률/건수 표시 추가
 
 ### Search Quality Improvements
 
@@ -115,6 +129,8 @@ Long term direction:
     ↓
 [SQLite Metadata Store]
 [Local JSON Vector Store]
+ [Redis Chat Cache]
+ [Sync Progress Store]
     ↓
 [Hybrid Retrieval + Chat Agent]
     ↓
@@ -132,6 +148,8 @@ Long term direction:
 - [backend/agents/chat_agent.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/agents/chat_agent.py)
 - [backend/tools/metadata_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/metadata_store.py)
 - [backend/tools/vector_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/vector_store.py)
+- [backend/tools/cache_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/cache_store.py)
+- [backend/tools/sync_progress_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/sync_progress_store.py)
 - [frontend/src/App.jsx](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/frontend/src/App.jsx)
 - [frontend/src/App.css](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/frontend/src/App.css)
 
@@ -141,22 +159,22 @@ Long term direction:
 - Frontend runs locally on `http://127.0.0.1:5173`
 - Gmail OAuth credentials are present
 - OpenAI API key is configured in local `.env`
+- Redis-backed chat cache is configured in local `.env`
 
 - 백엔드는 로컬 `http://127.0.0.1:8000` 에서 실행됨
 - 프론트엔드는 로컬 `http://127.0.0.1:5173` 에서 실행됨
 - Gmail OAuth credentials 파일이 존재함
 - OpenAI API 키가 로컬 `.env`에 설정되어 있음
+- Redis 기반 chat cache 설정이 로컬 `.env`에 추가됨
 
 ## What Is Not Done Yet | 아직 안 된 것
 
-- Redis cache is not implemented yet
 - Full mailbox sync is not implemented yet
 - Incremental sync via Gmail history API is not implemented yet
 - Browser extension is not implemented yet
 - PostgreSQL / pgvector migration is not implemented yet
 - Gmail-search-replacement level ranking is not fully implemented yet
 
-- Redis cache는 아직 미구현
 - Gmail 전체 메일박스 full sync는 아직 미구현
 - Gmail history API 기반 incremental sync는 아직 미구현
 - 브라우저 extension은 아직 미구현
@@ -169,23 +187,19 @@ Long term direction:
 - Some messages may still contain noisy newsletter/email-markup remnants
 - Current vector store is okay for MVP but not ideal for large mailbox scale
 - SQLite + JSON store is fine for local demo, but not ideal for full production scale
+- Redis cache is versioned by mailbox and invalidated after sync/index refresh
+- Sync progress UI currently uses polling against `/api/sync-status`
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
 - 현재 vector store는 MVP용으로는 괜찮지만 대용량 메일박스에는 적합하지 않음
 - SQLite + JSON 구조는 로컬 데모용으로는 괜찮지만 본격 운영용으로는 한계가 있음
+- Redis cache는 mailbox version 기준으로 관리되며 sync/index refresh 후 무효화됨
+- Sync progress UI는 현재 `/api/sync-status` polling 방식으로 동작함
 
 ## Recommended Next Steps | 추천 다음 단계
 
 ### Priority 1
-
-- Implement Redis cache for chat/search
-- Add cache invalidation after sync/index refresh
-
-- chat/search용 Redis cache 구현
-- sync/index 갱신 후 cache invalidation 추가
-
-### Priority 2
 
 - Implement full Gmail sync across the entire mailbox
 - Store and reuse Gmail `historyId`
@@ -195,7 +209,7 @@ Long term direction:
 - Gmail `historyId` 저장 및 재사용
 - Gmail History API 기반 incremental sync 추가
 
-### Priority 3
+### Priority 2
 
 - Upgrade storage from local JSON vector store to PostgreSQL + pgvector or Qdrant
 - Add stronger ranking:
@@ -211,7 +225,7 @@ Long term direction:
   - exact subject match
   - attachment / thread-aware ranking
 
-### Priority 4
+### Priority 3
 
 - Build a browser extension UI for Gmail sidebar integration
 - Connect extension UI to local backend first
@@ -249,7 +263,7 @@ When resuming, a good prompt would be:
 
 ```text
 Read PROJECT_STATUS.md and continue from the current architecture.
-Next, implement Redis chat/search caching.
+Next, implement full Gmail sync + incremental sync using historyId.
 ```
 
 또는:

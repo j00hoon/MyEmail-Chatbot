@@ -12,6 +12,16 @@ class SyncResponse(BaseModel):
     message: str
 
 
+class SyncStatusResponse(BaseModel):
+    state: str
+    stage: str
+    progress: int = Field(ge=0, le=100)
+    detail: str
+    fetched_count: int = 0
+    saved_count: int = 0
+    indexed_count: int = 0
+
+
 class EmailRecordResponse(BaseModel):
     id: int
     gmail_message_id: str

@@ -45,6 +45,16 @@ class Settings:
         os.getenv("GMAIL_TOKEN_PATH", ""),
         BASE_DIR / "token.json",
     )
+    redis_enabled: bool = os.getenv("REDIS_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_cache_ttl_seconds: int = int(os.getenv("REDIS_CACHE_TTL_SECONDS", "900"))
+    redis_key_prefix: str = os.getenv("REDIS_KEY_PREFIX", "myemail")
+    default_mailbox_id: str = os.getenv("DEFAULT_MAILBOX_ID", "local_default")
     cors_origins: list[str] = [
         origin.strip()
         for origin in os.getenv(

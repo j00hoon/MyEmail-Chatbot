@@ -30,6 +30,14 @@ const quickPrompts = [
   'Which emails include attachments I need to review?',
 ]
 
+const syncStages = [
+  'Connecting to Gmail',
+  'Pulling recent messages',
+  'Normalizing email content',
+  'Refreshing vector index',
+  'Finalizing local cache',
+]
+
 function App() {
   const [health, setHealth] = useState(null)
   const [emails, setEmails] = useState([])
@@ -41,8 +49,38 @@ function App() {
   const [loadingEmails, setLoadingEmails] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [syncStatus, setSyncStatus] = useState({
+    state: 'idle',
+    stage: 'Ready',
+    progress: 0,
+    detail: 'No sync in progress.',
+    fetched_count: 0,
+    saved_count: 0,
+    indexed_count: 0,
+  })
 
   const statusCards = buildStatusCards(health)
+  const activeSyncStage = syncStatus.stage
+
+  useEffect(() => {
+    if (!syncing) {
+      return
+    }
+
+    const pollSyncStatus = async () => {
+      try {
+        const response = await api.get('/api/sync-status')
+        setSyncStatus(response.data)
+      } catch {
+        return
+      }
+    }
+
+    pollSyncStatus()
+    const timer = window.setInterval(pollSyncStatus, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [syncing])
 
   const loadHealth = async () => {
     const response = await api.get('/api/health')
@@ -62,6 +100,7 @@ function App() {
   useEffect(() => {
     loadHealth().catch(() => {})
     loadEmails().catch(() => {})
+    api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
   }, [])
 
   const handleSync = async () => {
@@ -70,14 +109,26 @@ function App() {
     setSyncing(true)
     setError('')
     setStatus('')
+    setSyncStatus({
+      state: 'running',
+      stage: 'Connecting to Gmail',
+      progress: 5,
+      detail: `Preparing to sync up to ${normalizedCount} recent emails.`,
+      fetched_count: 0,
+      saved_count: 0,
+      indexed_count: 0,
+    })
 
     try {
       const response = await api.post('/api/sync', { count: normalizedCount })
       setStatus(response.data.message)
+      const syncStatusResponse = await api.get('/api/sync-status')
+      setSyncStatus(syncStatusResponse.data)
       await loadHealth()
       await loadEmails()
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Sync failed.')
+      api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
     } finally {
       setSyncing(false)
     }
@@ -191,6 +242,57 @@ function App() {
           <p className="panel-copy">
             Pull fresh Gmail messages, normalize content, then refresh the retrieval layer for chat.
           </p>
+
+          {syncing ? (
+            <div className="sync-live-card">
+              <div className="sync-live-header">
+                <div>
+                  <p className="sync-live-kicker">Live Progress</p>
+                  <strong>{activeSyncStage}</strong>
+                </div>
+                <span>{syncStatus.progress}% complete</span>
+              </div>
+              <div className="sync-progress-track" aria-hidden="true">
+                <span
+                  className="sync-progress-bar"
+                  style={{ width: `${Math.max(syncStatus.progress, 10)}%` }}
+                />
+              </div>
+              <p className="sync-live-detail">{syncStatus.detail}</p>
+              <div className="sync-stats-row">
+                <div className="sync-stat-pill">
+                  <span>Fetched</span>
+                  <strong>{syncStatus.fetched_count}</strong>
+                </div>
+                <div className="sync-stat-pill">
+                  <span>Saved</span>
+                  <strong>{syncStatus.saved_count}</strong>
+                </div>
+                <div className="sync-stat-pill">
+                  <span>Indexed</span>
+                  <strong>{syncStatus.indexed_count}</strong>
+                </div>
+              </div>
+              <div className="sync-stage-list">
+                {syncStages.map((stage, index) => {
+                  const currentStageIndex = Math.max(syncStages.indexOf(syncStatus.stage), 0)
+                  const state =
+                    index < currentStageIndex
+                      ? 'done'
+                      : index === currentStageIndex
+                        ? 'active'
+                        : 'upcoming'
+
+                  return (
+                    <div key={stage} className={`sync-stage ${state}`}>
+                      <span className="sync-stage-dot" />
+                      <span>{stage}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {status ? <p className="status success">{status}</p> : null}
           {error ? <p className="status error">{error}</p> : null}

@@ -19,7 +19,7 @@ class IndexingAgent:
     metadata_store: MetadataStore
     vector_store: VectorStore
 
-    def run(self, email_ids: list[int] | None = None):
+    def run(self, email_ids: list[int] | None = None, progress_callback=None):
         emails = self.metadata_store.get_emails_for_indexing(email_ids=email_ids)
         parser = TextParsingSkill()
         chunker = TextChunkingSkill()
@@ -27,8 +27,17 @@ class IndexingAgent:
         indexed_count = 0
         target_ids = [email.id for email in emails]
         self.vector_store.delete_by_email_ids(target_ids)
+        total = max(len(emails), 1)
 
-        for email in emails:
+        if progress_callback is not None:
+            progress_callback(
+                stage="Refreshing vector index",
+                progress=60,
+                detail=f"Rebuilding retrieval index for {len(emails)} emails.",
+                indexed_count=0,
+            )
+
+        for position, email in enumerate(emails, start=1):
             document = parser.execute(email)
             chunks = chunker.execute(document) or [document]
             for index, chunk in enumerate(chunks):
@@ -53,5 +62,12 @@ class IndexingAgent:
                 indexed_at=datetime.now(timezone.utc),
             )
             indexed_count += 1
+            if progress_callback is not None:
+                progress_callback(
+                    stage="Refreshing vector index",
+                    progress=60 + int((position / total) * 30),
+                    detail=f"Indexed {indexed_count} of {len(emails)} emails for search.",
+                    indexed_count=indexed_count,
+                )
 
         return IndexingResult(indexed_count=indexed_count, saved_count=len(emails))

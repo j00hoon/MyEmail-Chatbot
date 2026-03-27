@@ -4,6 +4,7 @@ from schemas import ChatResponse, SourceReference
 from skills.answer_generation import AnswerGenerationSkill
 from skills.embedding_generation import EmbeddingGenerationSkill
 from skills.vector_search import VectorSearchSkill
+from tools.cache_store import CacheStore
 from tools.metadata_store import MetadataStore
 from tools.vector_store import VectorStore
 
@@ -12,10 +13,21 @@ from tools.vector_store import VectorStore
 class ChatAgent:
     metadata_store: MetadataStore
     vector_store: VectorStore
+    cache_store: CacheStore | None = None
+    mailbox_id: str = "local_default"
 
     def run(self, question: str, top_k: int = 4):
         if not question.strip():
             raise ValueError("question must not be empty")
+
+        if self.cache_store is not None:
+            cached_response = self.cache_store.get_chat_response(
+                mailbox_id=self.mailbox_id,
+                question=question,
+                top_k=top_k,
+            )
+            if cached_response is not None:
+                return cached_response
 
         embedder = EmbeddingGenerationSkill()
         query_embedding = embedder.execute(question)
@@ -33,7 +45,7 @@ class ChatAgent:
 
         answer = AnswerGenerationSkill().execute(question=question, sources=merged_sources)
 
-        return ChatResponse(
+        response = ChatResponse(
             answer=answer,
             sources=[
                 SourceReference(
@@ -48,6 +60,14 @@ class ChatAgent:
                 for source in merged_sources
             ],
         )
+        if self.cache_store is not None:
+            self.cache_store.set_chat_response(
+                mailbox_id=self.mailbox_id,
+                question=question,
+                top_k=top_k,
+                response=response,
+            )
+        return response
 
     def _merge_sources(self, vector_results: list[dict], keyword_results: list[dict], top_k: int):
         merged = {}
