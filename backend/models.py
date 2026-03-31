@@ -26,3 +26,17 @@ class EmailRecord(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class SyncMeta(Base):
+    __tablename__ = "sync_meta"
+
+    key = Column(Text, primary_key=True)
+    value = Column(Text, nullable=True)
+    last_synced_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

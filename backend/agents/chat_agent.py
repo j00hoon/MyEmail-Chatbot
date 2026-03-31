@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from schemas import ChatResponse, SourceReference
+from config import settings
 from skills.answer_generation import AnswerGenerationSkill
 from skills.embedding_generation import EmbeddingGenerationSkill
 from skills.vector_search import VectorSearchSkill
@@ -39,6 +40,11 @@ class ChatAgent:
         keyword_results = self.metadata_store.keyword_search(
             query=question,
             limit=max(top_k * 2, 6),
+            scan_limit=(
+                settings.keyword_search_scan_limit
+                if settings.keyword_search_scan_limit > 0
+                else None
+            ),
         )
 
         merged_sources = self._merge_sources(search_results, keyword_results, top_k)

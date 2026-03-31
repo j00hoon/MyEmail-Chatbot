@@ -29,9 +29,13 @@ class Settings:
         "OPENAI_EMBEDDING_MODEL",
         "text-embedding-3-small",
     )
+    db_path: Path = _resolve_path(
+        os.getenv("DB_PATH", "./data/metadata.db"),
+        DATA_DIR / "metadata.db",
+    )
     database_url: str = os.getenv(
         "DATABASE_URL",
-        f"sqlite:///{(DATA_DIR / 'metadata.db').as_posix()}",
+        f"sqlite:///{db_path.as_posix()}",
     )
     vector_store_path: Path = _resolve_path(
         os.getenv("VECTOR_STORE_PATH", ""),
@@ -55,6 +59,7 @@ class Settings:
     redis_cache_ttl_seconds: int = int(os.getenv("REDIS_CACHE_TTL_SECONDS", "900"))
     redis_key_prefix: str = os.getenv("REDIS_KEY_PREFIX", "myemail")
     default_mailbox_id: str = os.getenv("DEFAULT_MAILBOX_ID", "local_default")
+    keyword_search_scan_limit: int = int(os.getenv("KEYWORD_SEARCH_SCAN_LIMIT", "0"))
     cors_origins: list[str] = [
         origin.strip()
         for origin in os.getenv(

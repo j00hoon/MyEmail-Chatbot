@@ -19,6 +19,7 @@ class SyncProgressStore:
     def __init__(self):
         self._lock = Lock()
         self._state = SyncProgressState()
+        self._run_id = 0
 
     def snapshot(self):
         with self._lock:
@@ -26,15 +27,20 @@ class SyncProgressStore:
 
     def start(self, requested_count: int):
         with self._lock:
+            if self._state.state == "running":
+                return None
+            self._run_id += 1
             self._state = SyncProgressState(
                 state="running",
                 stage="Connecting to Gmail",
                 progress=5,
-                detail=f"Preparing to sync up to {requested_count} recent emails.",
+                detail="Preparing Gmail sync.",
             )
+            return self._run_id
 
     def update(
         self,
+        run_id: int,
         *,
         stage: str | None = None,
         progress: int | None = None,
@@ -44,6 +50,9 @@ class SyncProgressStore:
         indexed_count: int | None = None,
     ):
         with self._lock:
+            if run_id != self._run_id:
+                return
+            self._state.state = "running"
             if stage is not None:
                 self._state.stage = stage
             if progress is not None:
@@ -57,8 +66,10 @@ class SyncProgressStore:
             if indexed_count is not None:
                 self._state.indexed_count = indexed_count
 
-    def finish(self, *, fetched_count: int, saved_count: int, indexed_count: int):
+    def finish(self, run_id: int, *, fetched_count: int, saved_count: int, indexed_count: int):
         with self._lock:
+            if run_id != self._run_id:
+                return
             self._state = SyncProgressState(
                 state="completed",
                 stage="Sync complete",
@@ -69,8 +80,10 @@ class SyncProgressStore:
                 indexed_count=indexed_count,
             )
 
-    def fail(self, detail: str):
+    def fail(self, run_id: int, detail: str):
         with self._lock:
+            if run_id != self._run_id:
+                return
             self._state.state = "failed"
             self._state.stage = "Sync failed"
             self._state.progress = 100

@@ -7,6 +7,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from config import settings
 
@@ -26,6 +27,23 @@ class GmailEmailPayload:
     body_text: str
     attachment_names: list[str]
     raw_payload: str
+
+
+@dataclass
+class GmailFullSyncResult:
+    emails: list[GmailEmailPayload]
+    history_id: str
+
+
+@dataclass
+class GmailHistoryDelta:
+    emails: list[GmailEmailPayload]
+    deleted_message_ids: list[str]
+    history_id: str
+
+
+class HistoryIdExpiredError(Exception):
+    pass
 
 
 class GmailClient:
@@ -52,12 +70,146 @@ class GmailClient:
 
         return build("gmail", "v1", credentials=creds)
 
+    def get_current_history_id(self, service=None):
+        service = service or self.get_service()
+        profile = service.users().getProfile(userId="me").execute()
+        return str(profile["historyId"])
+
+    def fetch_full_sync(self, progress_callback=None):
+        service = self.get_service()
+        emails = []
+        page_token = None
+        page_count = 0
+
+        while True:
+            response = (
+                service.users()
+                .messages()
+                .list(userId="me", maxResults=500, pageToken=page_token)
+                .execute()
+            )
+            messages = response.get("messages", [])
+            page_count += 1
+
+            for message in messages:
+                detail = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=message["id"], format="full")
+                    .execute()
+                )
+                emails.append(self._parse_email(detail))
+
+            if progress_callback is not None:
+                progress_callback(page_count=page_count, fetched_count=len(emails))
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return GmailFullSyncResult(
+            emails=emails,
+            history_id=self.get_current_history_id(service=service),
+        )
+
+    def fetch_incremental_changes(self, history_id: str, progress_callback=None):
+        service = self.get_service()
+        page_token = None
+        latest_history_id = history_id
+        changed_message_ids: set[str] = set()
+        deleted_message_ids: set[str] = set()
+        processed_history_records = 0
+
+        while True:
+            try:
+                response = (
+                    service.users()
+                    .history()
+                    .list(
+                        userId="me",
+                        startHistoryId=history_id,
+                        maxResults=500,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+            except HttpError as exc:
+                if getattr(exc.resp, "status", None) == 404:
+                    raise HistoryIdExpiredError("Stored Gmail historyId is expired.") from exc
+                raise
+
+            latest_history_id = str(response.get("historyId", latest_history_id))
+            history_records = response.get("history", [])
+            processed_history_records += len(history_records)
+
+            for entry in history_records:
+                for item in entry.get("messagesDeleted", []):
+                    message = item.get("message", {})
+                    message_id = message.get("id")
+                    if message_id:
+                        deleted_message_ids.add(message_id)
+
+                for bucket in ("messagesAdded", "labelsAdded", "labelsRemoved"):
+                    for item in entry.get(bucket, []):
+                        message = item.get("message", {})
+                        message_id = message.get("id")
+                        if message_id:
+                            changed_message_ids.add(message_id)
+
+                for message in entry.get("messages", []):
+                    message_id = message.get("id")
+                    if message_id:
+                        changed_message_ids.add(message_id)
+
+            if progress_callback is not None:
+                progress_callback(
+                    processed_history_records=processed_history_records,
+                    changed_count=len(changed_message_ids),
+                    deleted_count=len(deleted_message_ids),
+                )
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        changed_message_ids -= deleted_message_ids
+        emails = []
+        total_changed = max(len(changed_message_ids), 1)
+
+        for position, message_id in enumerate(sorted(changed_message_ids), start=1):
+            try:
+                detail = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=message_id, format="full")
+                    .execute()
+                )
+            except HttpError as exc:
+                if getattr(exc.resp, "status", None) == 404:
+                    deleted_message_ids.add(message_id)
+                    continue
+                raise
+
+            emails.append(self._parse_email(detail))
+            if progress_callback is not None:
+                progress_callback(
+                    processed_history_records=processed_history_records,
+                    changed_count=position,
+                    deleted_count=len(deleted_message_ids),
+                )
+
+        return GmailHistoryDelta(
+            emails=emails,
+            deleted_message_ids=sorted(deleted_message_ids),
+            history_id=self.get_current_history_id(service=service),
+        )
+
     def fetch_emails(self, max_results: int = 10):
         service = self.get_service()
         response = (
             service.users()
             .messages()
-            .list(userId="me", q="category:primary", maxResults=max_results)
+            .list(userId="me", maxResults=max_results)
             .execute()
         )
         messages = response.get("messages", [])

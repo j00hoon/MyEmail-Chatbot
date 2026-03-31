@@ -31,7 +31,7 @@ cache_store = CacheStore(
     key_prefix=settings.redis_key_prefix,
     enabled=settings.redis_enabled,
 )
-ingestion_agent = IngestionAgent(metadata_store=metadata_store)
+ingestion_agent = IngestionAgent(metadata_store=metadata_store, vector_store=vector_store)
 indexing_agent = IndexingAgent(metadata_store=metadata_store, vector_store=vector_store)
 chat_agent = ChatAgent(
     metadata_store=metadata_store,
@@ -76,42 +76,80 @@ def health_check():
 
 @app.post("/api/sync", response_model=SyncResponse)
 def sync_gmail(payload: SyncRequest):
-    sync_progress_store.start(payload.count)
+    run_id = sync_progress_store.start(payload.count)
+    if run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="A Gmail sync is already running. Wait for it to finish before starting another one.",
+        )
+
+    def progress_callback(**kwargs):
+        sync_progress_store.update(run_id, **kwargs)
+
     try:
-        emails = ingestion_agent.run(
+        ingestion_result = ingestion_agent.run(
             max_results=payload.count,
-            progress_callback=sync_progress_store.update,
+            progress_callback=progress_callback,
         )
         indexing_result = indexing_agent.run(
-            email_ids=[email.id for email in emails],
-            progress_callback=sync_progress_store.update,
+            email_ids=(
+                [email.id for email in ingestion_result.saved_emails]
+                if ingestion_result.mode != "resume_full"
+                else None
+            ),
+            progress_callback=progress_callback,
+            only_unindexed=ingestion_result.mode == "resume_full",
         )
+        metadata_store.set_sync_value("historyId", ingestion_result.history_id)
+        metadata_store.delete_sync_value("pendingHistoryId")
         cache_store.bump_mailbox_version(settings.default_mailbox_id)
         sync_progress_store.update(
+            run_id,
             stage="Finalizing local cache",
             progress=95,
-            detail="Refreshing cached responses after index rebuild.",
-            fetched_count=len(emails),
-            saved_count=indexing_result.saved_count,
+            detail=(
+                "Refreshing cached responses after sync and index rebuild."
+                if ingestion_result.mode in {"full", "resume_full"}
+                else "Refreshing cached responses after incremental sync."
+            ),
+            fetched_count=ingestion_result.fetched_count,
+            saved_count=(
+                indexing_result.saved_count
+                if ingestion_result.mode != "resume_full"
+                else ingestion_result.fetched_count
+            ),
             indexed_count=indexing_result.indexed_count,
         )
         sync_progress_store.finish(
-            fetched_count=len(emails),
-            saved_count=indexing_result.saved_count,
+            run_id,
+            fetched_count=ingestion_result.fetched_count,
+            saved_count=(
+                indexing_result.saved_count
+                if ingestion_result.mode != "resume_full"
+                else ingestion_result.fetched_count
+            ),
             indexed_count=indexing_result.indexed_count,
         )
     except FileNotFoundError as exc:
-        sync_progress_store.fail(str(exc))
+        sync_progress_store.fail(run_id, str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        sync_progress_store.fail(str(exc))
+        sync_progress_store.fail(run_id, str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return SyncResponse(
-        fetched_count=len(emails),
+        fetched_count=ingestion_result.fetched_count,
         indexed_count=indexing_result.indexed_count,
-        saved_count=indexing_result.saved_count,
-        message="Gmail sync and indexing completed.",
+        saved_count=(
+            indexing_result.saved_count
+            if ingestion_result.mode != "resume_full"
+            else ingestion_result.fetched_count
+        ),
+        message=(
+            "Full Gmail sync and indexing completed."
+            if ingestion_result.mode in {"full", "resume_full"}
+            else "Incremental Gmail sync and indexing completed."
+        ),
     )
 
 

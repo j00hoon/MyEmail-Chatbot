@@ -65,7 +65,7 @@ class CacheStore:
         question_hash = hashlib.sha256(question.strip().lower().encode("utf-8")).hexdigest()
         return self._prefixed(
             "chat",
-            "v1",
+            "v2",
             mailbox_id,
             str(version),
             question_hash,

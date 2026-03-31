@@ -10,15 +10,30 @@ from config import settings
 class EmbeddingGenerationSkill:
     dimension = 256
 
+    def __init__(self):
+        self.client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+
     def execute(self, text: str):
-        if settings.openai_api_key:
-            client = OpenAI(api_key=settings.openai_api_key)
-            response = client.embeddings.create(
+        if self.client is not None:
+            response = self.client.embeddings.create(
                 model=settings.openai_embedding_model,
                 input=text,
             )
             return response.data[0].embedding
         return self._fallback_embedding(text)
+
+    def execute_many(self, texts: list[str]):
+        if not texts:
+            return []
+
+        if self.client is not None:
+            response = self.client.embeddings.create(
+                model=settings.openai_embedding_model,
+                input=texts,
+            )
+            return [item.embedding for item in response.data]
+
+        return [self._fallback_embedding(text) for text in texts]
 
     def _fallback_embedding(self, text: str):
         vector = [0.0] * self.dimension

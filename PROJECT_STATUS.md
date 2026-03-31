@@ -51,6 +51,10 @@ Long term direction:
 - Sync status endpoint implemented
 - Redis chat caching implemented
 - Cache invalidation after sync/index refresh implemented
+- Full Gmail mailbox sync implemented with `messages.list` pagination
+- Incremental sync implemented using stored Gmail `historyId`
+- Automatic fallback to full sync when Gmail history expires
+- `sync_meta` table added in SQLite for sync state persistence
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -75,6 +79,10 @@ Long term direction:
 - Sync status API 구현 완료
 - Redis chat cache 구현 완료
 - sync/index refresh 후 cache invalidation 구현 완료
+- Gmail 전체 메일박스 full sync 구현 완료
+- 저장된 Gmail `historyId` 기반 incremental sync 구현 완료
+- Gmail history 만료 시 full sync fallback 구현 완료
+- SQLite `sync_meta` 테이블로 sync 상태 저장 구현 완료
 
 ### Storage
 
@@ -169,14 +177,10 @@ Long term direction:
 
 ## What Is Not Done Yet | 아직 안 된 것
 
-- Full mailbox sync is not implemented yet
-- Incremental sync via Gmail history API is not implemented yet
 - Browser extension is not implemented yet
 - PostgreSQL / pgvector migration is not implemented yet
 - Gmail-search-replacement level ranking is not fully implemented yet
 
-- Gmail 전체 메일박스 full sync는 아직 미구현
-- Gmail history API 기반 incremental sync는 아직 미구현
 - 브라우저 extension은 아직 미구현
 - PostgreSQL / pgvector 전환은 아직 미구현
 - Gmail 검색 대체 수준의 정교한 ranking은 아직 미구현
@@ -201,13 +205,13 @@ Long term direction:
 
 ### Priority 1
 
-- Implement full Gmail sync across the entire mailbox
-- Store and reuse Gmail `historyId`
-- Add incremental sync using Gmail History API
+- Harden Gmail sync for very large mailboxes and partial failures
+- Add clearer UI state for deletions / fallback-to-full-sync cases
+- Improve recovery and resumability around sync interruptions
 
-- Gmail 전체 메일박스 full sync 구현
-- Gmail `historyId` 저장 및 재사용
-- Gmail History API 기반 incremental sync 추가
+- 대용량 메일박스와 부분 실패 상황에 대한 Gmail sync 안정화
+- 삭제 / full sync fallback 상황을 UI에 더 명확히 표시
+- sync 중단 후 복구 / 재개 흐름 개선
 
 ### Priority 2
 
@@ -263,14 +267,14 @@ When resuming, a good prompt would be:
 
 ```text
 Read PROJECT_STATUS.md and continue from the current architecture.
-Next, implement full Gmail sync + incremental sync using historyId.
+Next, harden the Gmail sync flow for large mailboxes and improve sync UI visibility.
 ```
 
 또는:
 
 ```text
 PROJECT_STATUS.md 읽고 이어서 해줘.
-다음 단계로 Gmail full sync + incremental sync 구현하자.
+다음 단계로 Gmail sync 안정화와 sync UI 개선 작업을 진행하자.
 ```
 
 ## Security Note | 보안 메모

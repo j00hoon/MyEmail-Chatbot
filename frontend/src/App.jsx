@@ -3,50 +3,15 @@ import axios from 'axios'
 import './App.css'
 
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: '/',
 })
-
-const buildStatusCards = (health) => [
-  {
-    label: 'Run Mode',
-    value: health?.app_env || 'checking',
-    description: 'Current app runtime profile for this local workspace.',
-  },
-  {
-    label: 'AI Engine',
-    value: health?.openai_configured ? 'OpenAI connected' : 'Local fallback',
-    description: 'Shows whether GPT-powered generation is active or offline retrieval is used.',
-  },
-  {
-    label: 'Gmail Access',
-    value: health?.gmail_credentials_present ? 'OAuth ready' : 'Credentials missing',
-    description: 'Confirms whether Gmail OAuth files are available for mailbox sync.',
-  },
-]
-
-const quickPrompts = [
-  'What recruiter emails arrived this week?',
-  'Summarize interview follow-ups I should send.',
-  'Which emails include attachments I need to review?',
-]
-
-const syncStages = [
-  'Connecting to Gmail',
-  'Pulling recent messages',
-  'Normalizing email content',
-  'Refreshing vector index',
-  'Finalizing local cache',
-]
 
 function App() {
   const [health, setHealth] = useState(null)
-  const [emails, setEmails] = useState([])
-  const [count, setCount] = useState(10)
   const [chatInput, setChatInput] = useState('')
   const [chatHistory, setChatHistory] = useState([])
   const [syncing, setSyncing] = useState(false)
   const [chatting, setChatting] = useState(false)
-  const [loadingEmails, setLoadingEmails] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [syncStatus, setSyncStatus] = useState({
@@ -59,11 +24,10 @@ function App() {
     indexed_count: 0,
   })
 
-  const statusCards = buildStatusCards(health)
-  const activeSyncStage = syncStatus.stage
+  const isSyncRunning = syncing || syncStatus.state === 'running'
 
   useEffect(() => {
-    if (!syncing) {
+    if (!isSyncRunning) {
       return
     }
 
@@ -80,32 +44,23 @@ function App() {
     const timer = window.setInterval(pollSyncStatus, 1000)
 
     return () => window.clearInterval(timer)
-  }, [syncing])
+  }, [isSyncRunning])
 
   const loadHealth = async () => {
     const response = await api.get('/api/health')
     setHealth(response.data)
   }
 
-  const loadEmails = async () => {
-    setLoadingEmails(true)
-    try {
-      const response = await api.get('/api/emails?limit=20')
-      setEmails(Array.isArray(response.data) ? response.data : [])
-    } finally {
-      setLoadingEmails(false)
-    }
-  }
-
   useEffect(() => {
     loadHealth().catch(() => {})
-    loadEmails().catch(() => {})
     api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
   }, [])
 
   const handleSync = async () => {
-    const normalizedCount = Math.min(50, Math.max(1, Number(count) || 10))
-    setCount(normalizedCount)
+    if (isSyncRunning) {
+      return
+    }
+
     setSyncing(true)
     setError('')
     setStatus('')
@@ -113,24 +68,26 @@ function App() {
       state: 'running',
       stage: 'Connecting to Gmail',
       progress: 5,
-      detail: `Preparing to sync up to ${normalizedCount} recent emails.`,
+      detail: 'Preparing mailbox sync.',
       fetched_count: 0,
       saved_count: 0,
       indexed_count: 0,
     })
 
     try {
-      const response = await api.post('/api/sync', { count: normalizedCount })
+      const response = await api.post('/api/sync', { count: 10 })
       setStatus(response.data.message)
       const syncStatusResponse = await api.get('/api/sync-status')
       setSyncStatus(syncStatusResponse.data)
       await loadHealth()
-      await loadEmails()
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Sync failed.')
       api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
     } finally {
-      setSyncing(false)
+      api.get('/api/sync-status')
+        .then((response) => setSyncStatus(response.data))
+        .catch(() => {})
+        .finally(() => setSyncing(false))
     }
   }
 
@@ -166,165 +123,37 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="hero-grid">
-        <article className="hero-card hero-main">
-          <div className="hero-topline">
-            <span className="hero-badge">Private Gmail Workspace</span>
-            <span className="hero-dot" />
-            <span className="hero-mini">local RAG system</span>
-          </div>
-          <h1>Turn your inbox into a searchable purple command center.</h1>
-          <p className="hero-copy">
-            Sync recent Gmail threads, index them locally, and ask natural questions
-            through a cleaner personal AI workspace built for demos and iteration.
-          </p>
-          <div className="hero-actions">
-            <button type="button" onClick={handleSync} disabled={syncing}>
-              {syncing ? 'Syncing and indexing...' : 'Sync latest emails'}
-            </button>
-            <div className="hero-chip">
-              <span>Indexed emails</span>
-              <strong>{emails.length}</strong>
-            </div>
-          </div>
-        </article>
-
-        <div className="status-bento">
-          {statusCards.map((item) => (
-            <article className="status-card" key={item.label}>
-              <p className="card-label">{item.label}</p>
-              <h2>{item.value}</h2>
-              <p className="card-copy">{item.description}</p>
-            </article>
-          ))}
+      <header className="simple-header">
+        <div>
+          <p className="section-kicker">Chat Agent</p>
+          <h1 className="app-title">Ask Your Inbox</h1>
         </div>
-      </section>
+        <div className="header-pills">
+          <div className="hero-chip">
+            <span>AI</span>
+            <strong>{health?.openai_configured ? 'On' : 'Off'}</strong>
+          </div>
+          <div className="hero-chip">
+            <span>Gmail</span>
+            <strong>{health?.gmail_credentials_present ? 'Ready' : 'Missing'}</strong>
+          </div>
+        </div>
+      </header>
 
-      <section className="workspace-grid">
-        <article className="panel panel-compact">
+      <section className="chat-layout">
+        <article className="panel panel-chat panel-chat-main">
           <div className="panel-header">
             <div>
-              <p className="section-kicker">Ingestion Agent</p>
-              <h2>Sync Settings</h2>
+              <p className="section-kicker">Main Workspace</p>
+              <h2>Chat With Your Email</h2>
             </div>
-            <span className="panel-badge">step 01</span>
-          </div>
-
-          <div className="sync-metric">
-            <span className="sync-metric-label">Next sync size</span>
-            <strong>{count}</strong>
-            <small>recent Gmail emails</small>
-          </div>
-
-          <label className="input-group" htmlFor="count">
-            <span>Recent email count</span>
-            <input
-              id="count"
-              type="number"
-              min="1"
-              max="50"
-              value={count}
-              onChange={(event) => setCount(event.target.value)}
-            />
-          </label>
-
-          <div className="sync-options">
-            <div className="mini-card">
-              <span>Storage</span>
-              <strong>SQLite + local vector index</strong>
-            </div>
-            <div className="mini-card">
-              <span>Mode</span>
-              <strong>{health?.openai_configured ? 'GPT-assisted RAG' : 'retrieval only'}</strong>
-            </div>
-          </div>
-
-          <p className="panel-copy">
-            Pull fresh Gmail messages, normalize content, then refresh the retrieval layer for chat.
-          </p>
-
-          {syncing ? (
-            <div className="sync-live-card">
-              <div className="sync-live-header">
-                <div>
-                  <p className="sync-live-kicker">Live Progress</p>
-                  <strong>{activeSyncStage}</strong>
-                </div>
-                <span>{syncStatus.progress}% complete</span>
-              </div>
-              <div className="sync-progress-track" aria-hidden="true">
-                <span
-                  className="sync-progress-bar"
-                  style={{ width: `${Math.max(syncStatus.progress, 10)}%` }}
-                />
-              </div>
-              <p className="sync-live-detail">{syncStatus.detail}</p>
-              <div className="sync-stats-row">
-                <div className="sync-stat-pill">
-                  <span>Fetched</span>
-                  <strong>{syncStatus.fetched_count}</strong>
-                </div>
-                <div className="sync-stat-pill">
-                  <span>Saved</span>
-                  <strong>{syncStatus.saved_count}</strong>
-                </div>
-                <div className="sync-stat-pill">
-                  <span>Indexed</span>
-                  <strong>{syncStatus.indexed_count}</strong>
-                </div>
-              </div>
-              <div className="sync-stage-list">
-                {syncStages.map((stage, index) => {
-                  const currentStageIndex = Math.max(syncStages.indexOf(syncStatus.stage), 0)
-                  const state =
-                    index < currentStageIndex
-                      ? 'done'
-                      : index === currentStageIndex
-                        ? 'active'
-                        : 'upcoming'
-
-                  return (
-                    <div key={stage} className={`sync-stage ${state}`}>
-                      <span className="sync-stage-dot" />
-                      <span>{stage}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {status ? <p className="status success">{status}</p> : null}
-          {error ? <p className="status error">{error}</p> : null}
-        </article>
-
-        <article className="panel panel-chat">
-          <div className="panel-header">
-            <div>
-              <p className="section-kicker">Chat Agent</p>
-              <h2>Ask Your Inbox</h2>
-            </div>
-            <span className="panel-badge">step 02</span>
-          </div>
-
-          <div className="prompt-row">
-            {quickPrompts.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                className="prompt-chip"
-                onClick={() => setChatInput(prompt)}
-              >
-                {prompt}
-              </button>
-            ))}
+            <span className="panel-badge">chat</span>
           </div>
 
           <div className="chat-box">
             {chatHistory.length === 0 ? (
               <div className="empty-state">
-                <p>Try prompts like:</p>
-                <strong>Which recruiter emails need a reply this week?</strong>
+                <strong>Ask about recent emails, recruiters, interviews, receipts, or certifications.</strong>
               </div>
             ) : (
               chatHistory.map((message, index) => (
@@ -369,64 +198,53 @@ function App() {
             </div>
           </div>
         </article>
-      </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="section-kicker">Indexed Metadata</p>
-            <h2>Stored Emails</h2>
-          </div>
-          <div className="stored-header-actions">
-            <div className="hero-chip">
-              <span>Visible</span>
-              <strong>{emails.length}</strong>
+        <aside className="panel panel-sync-side">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">Mailbox</p>
+              <h2>Refresh Email</h2>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={loadEmails}
-              disabled={loadingEmails}
-            >
-              {loadingEmails ? 'Refreshing...' : 'Refresh list'}
-            </button>
+            <span className={`status-pill ${syncStatus.state}`}>{syncStatus.state}</span>
           </div>
-        </div>
 
-        <div className="email-list">
-          {emails.length === 0 ? (
-            <div className="empty-state">
-              <p>No emails indexed yet.</p>
-              <strong>Run sync first to fill your local knowledge base.</strong>
+          <p className="panel-copy">
+            Sync once to load your mailbox, then refresh again anytime to pull changes.
+          </p>
+
+          <button type="button" onClick={handleSync} disabled={isSyncRunning}>
+            {isSyncRunning ? 'Refreshing...' : 'Refresh email'}
+          </button>
+
+          {isSyncRunning ? (
+            <div className="sync-live-card compact">
+              <div className="sync-live-header simple">
+                <strong>{syncStatus.stage}</strong>
+                <span>{syncStatus.progress}%</span>
+              </div>
+              <div className="sync-progress-track" aria-hidden="true">
+                <span
+                  className="sync-progress-bar"
+                  style={{ width: `${Math.max(syncStatus.progress, 10)}%` }}
+                />
+              </div>
+              <p className="sync-live-detail">{syncStatus.detail}</p>
             </div>
           ) : (
-            emails.map((email) => (
-              <article className="email-card" key={email.gmail_message_id}>
-                <div className="email-header">
-                  <div>
-                    <p className="email-meta-label">Email record</p>
-                    <h3>{email.subject || 'No Subject'}</h3>
-                    <span>{email.sender || 'Unknown sender'}</span>
-                  </div>
-                  <span className="email-tag">
-                    {email.attachment_names?.length || 0} attachments
-                  </span>
-                </div>
-                <p>{email.snippet || email.body_text || 'No preview available.'}</p>
-                {email.attachment_names?.length ? (
-                  <p className="attachments">
-                    Attachments: {email.attachment_names.join(', ')}
-                  </p>
-                ) : null}
-                <div className="email-footer">
-                  <span className="email-id">ID {email.gmail_message_id.slice(0, 12)}</span>
-                  <span className="email-state">indexed locally</span>
-                </div>
-              </article>
-            ))
+            <p className="sync-idle-note">
+              {syncStatus.state === 'completed'
+                ? 'Mailbox is up to date.'
+                : syncStatus.state === 'failed'
+                  ? syncStatus.detail
+                  : 'No refresh in progress.'}
+            </p>
           )}
-        </div>
+
+          {status ? <p className="status success">{status}</p> : null}
+          {error ? <p className="status error">{error}</p> : null}
+        </aside>
       </section>
+
     </main>
   )
 }

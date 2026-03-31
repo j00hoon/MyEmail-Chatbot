@@ -44,7 +44,8 @@ This project is evolving toward a smarter Gmail search experience that can event
 
 ## What It Can Do Right Now
 
-- Sync recent Gmail messages from `1` to `50`
+- Run a first-time full Gmail mailbox sync into local SQLite + JSON vector storage
+- Reuse stored Gmail `historyId` for later incremental syncs
 - Store subject, sender, body, snippet, and attachment names locally
 - Build embeddings and retrieval index
 - Ask natural-language questions over synced emails
@@ -120,6 +121,7 @@ APP_ENV=local
 OPENAI_API_KEY=your_key_here
 OPENAI_CHAT_MODEL=gpt-5-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+DB_PATH=./data/metadata.db
 DATABASE_URL=sqlite:///./data/metadata.db
 VECTOR_STORE_PATH=./data/vector_store.json
 GMAIL_CREDENTIALS_PATH=./credentials.json
@@ -133,6 +135,8 @@ CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 ```
 
 If `OPENAI_API_KEY` is missing, the app still works in fallback local retrieval mode, but answer quality may be lower.
+
+`DB_PATH` is the preferred way to point SQLite at a file path. `DATABASE_URL` still works and takes precedence if you later deploy with a different database URL.
 
 Redis caching is optional for local development. When enabled, chat responses are cached by mailbox version so a completed Gmail sync automatically invalidates older cached answers.
 
@@ -159,8 +163,9 @@ Local URLs:
 2. Open the frontend in the browser
 3. Click `Sync latest emails`
 4. Complete the Gmail OAuth login if prompted
-5. Wait for sync + indexing to finish
-6. Start asking questions in the chat UI
+5. The first run performs a full mailbox sync, and later syncs use Gmail history-based incremental updates
+6. Wait for sync + indexing to finish
+7. Start asking questions in the chat UI
 
 ## Main API Endpoints
 
@@ -214,16 +219,14 @@ README.md
 
 ## Current Limitations
 
-- Full mailbox sync is not implemented yet
-- Incremental sync via Gmail History API is not implemented yet
 - Browser extension is not implemented yet
 - Local JSON vector store is fine for MVP, but not ideal for large-scale indexing
 - Redis is optional but recommended if you want faster repeated chat responses
 
 ## Recommended Next Upgrades
 
-- Add full mailbox sync
-- Add Gmail incremental sync with `historyId`
+- Add stronger retry/resume handling for very large mailboxes
+- Add better UI visibility for deleted or skipped emails during sync
 - Upgrade storage to PostgreSQL + pgvector or Qdrant
 - Build a Gmail browser extension sidebar
 
