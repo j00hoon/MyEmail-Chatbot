@@ -7,7 +7,7 @@ class AnswerGenerationSkill:
     max_source_chars = 2500
     max_total_context_chars = 8000
 
-    def execute(self, question: str, sources: list[dict]):
+    def execute(self, question: str, sources: list[dict], answer_mode: str = "single_email"):
         if not sources:
             return "I could not find any indexed emails that look relevant yet. Try syncing Gmail first."
 
@@ -35,25 +35,15 @@ class AnswerGenerationSkill:
                 total_context_chars += len(block)
 
             joined_context = "\n\n".join(context_blocks)
-            prompt = (
-                "You are a personal Gmail assistant. Answer only from the provided email context. "
-                "Choose the single best matching email for the user's question and format the answer exactly with these labels in this order:\n"
-                "Answer:\nFrom:\nDate:\nSubject:\nSummary:\nAttachment:\n\n"
-                "Rules:\n"
-                "- 'Answer' must be a direct 1-2 sentence answer to the user's question.\n"
-                "- 'From', 'Date', and 'Subject' must come from the selected email.\n"
-                "- 'Summary' must be a short plain-English summary of that selected email.\n"
-                "- 'Attachment' must say either 'None' or list the attachment names.\n"
-                "- If the answer is uncertain, say so clearly in 'Answer'.\n"
-                "- Do not add extra headings, bullets, or commentary outside those six labels.\n\n"
-                f"Question:\n{question}\n\n"
-                f"Email Context:\n\n{joined_context}"
-            )
+            prompt = self._prompt_for_mode(question=question, joined_context=joined_context, answer_mode=answer_mode)
             response = client.responses.create(
                 model=settings.openai_chat_model,
                 input=prompt,
             )
             return response.output_text.strip()
+
+        if answer_mode == "multi_email":
+            return self._fallback_multi_email_answer(question=question, sources=sources)
 
         attachment_text = ", ".join(primary_source["attachment_names"]) or "None"
         summary_lines = [
@@ -65,3 +55,55 @@ class AnswerGenerationSkill:
             f"Attachment: {attachment_text}",
         ]
         return "\n".join(summary_lines)
+
+    def _prompt_for_mode(self, question: str, joined_context: str, answer_mode: str):
+        if answer_mode == "multi_email":
+            return (
+                "You are a personal Gmail assistant. Answer only from the provided email context. "
+                "The user asked for multiple emails, so return a compact ranked list.\n\n"
+                "Format exactly like this:\n"
+                "Answer:\n"
+                "Email 1\nFrom:\nDate:\nSubject:\nSummary:\nAttachment:\n"
+                "Email 2\nFrom:\nDate:\nSubject:\nSummary:\nAttachment:\n"
+                "Continue only for the matching emails you actually found.\n\n"
+                "Rules:\n"
+                "- 'Answer' should summarize what these emails represent overall.\n"
+                "- Each email block must keep the exact labels shown above.\n"
+                "- 'Attachment' must say either 'None' or list attachment names.\n"
+                "- Do not add bullets or commentary outside this structure.\n\n"
+                f"Question:\n{question}\n\n"
+                f"Email Context:\n\n{joined_context}"
+            )
+
+        return (
+            "You are a personal Gmail assistant. Answer only from the provided email context. "
+            "Choose the single best matching email for the user's question and format the answer exactly with these labels in this order:\n"
+            "Answer:\nFrom:\nDate:\nSubject:\nSummary:\nAttachment:\n\n"
+            "Rules:\n"
+            "- 'Answer' must be a direct 1-2 sentence answer to the user's question.\n"
+            "- 'From', 'Date', and 'Subject' must come from the selected email.\n"
+            "- 'Summary' must be a short plain-English summary of that selected email.\n"
+            "- 'Attachment' must say either 'None' or list the attachment names.\n"
+            "- If the answer is uncertain, say so clearly in 'Answer'.\n"
+            "- Do not add extra headings, bullets, or commentary outside those six labels.\n\n"
+            f"Question:\n{question}\n\n"
+            f"Email Context:\n\n{joined_context}"
+        )
+
+    def _fallback_multi_email_answer(self, question: str, sources: list[dict]):
+        lines = [
+            f"Answer: I found {len(sources)} matching emails for your request.",
+        ]
+        for index, source in enumerate(sources, start=1):
+            attachment_text = ", ".join(source["attachment_names"]) or "None"
+            lines.extend(
+                [
+                    f"Email {index}",
+                    f"From: {source['sender'] or 'Unknown'}",
+                    f"Date: {source['sent_at'] or 'Unknown'}",
+                    f"Subject: {source['subject']}",
+                    f"Summary: {(source['snippet'] or source['document'] or 'No summary available.')[:220]}",
+                    f"Attachment: {attachment_text}",
+                ]
+            )
+        return "\n".join(lines)

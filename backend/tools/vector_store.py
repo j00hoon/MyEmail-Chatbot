@@ -80,6 +80,9 @@ class VectorStore:
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
+    def export_records(self):
+        return list(self._load())
+
     def _load(self):
         with self._cache_lock:
             if self._records_cache is None:

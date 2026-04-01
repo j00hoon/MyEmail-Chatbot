@@ -70,6 +70,20 @@ Long term direction:
   - `Attachment`
 - Vector search path optimized to reduce repeated per-record work
 - High-confidence keyword matches can skip vector search for faster responses
+- Added question-intent classification for:
+  - `latest_from`
+  - `sender_lookup`
+  - `date_lookup`
+  - `top_recent_important`
+  - `general`
+- Deterministic retrieval path added for sender/date/latest questions
+- Result-aware chat cache signatures added so cached answers depend on selected source emails
+- Optional LangChain runtime retriever path added for general questions
+- General questions can now use:
+  - MultiQueryRetriever
+  - EnsembleRetriever
+  - optional Cohere rerank compression when `COHERE_API_KEY` is configured
+- Runtime retriever reuses stored local embeddings instead of rebuilding vectors from scratch
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -113,6 +127,20 @@ Long term direction:
   - `Attachment`
 - vector search에서 반복 계산을 줄이는 최적화 추가
 - 키워드 매칭 신뢰도가 높은 경우 vector search를 생략해 응답 속도 개선
+- 다음 질문 유형에 대한 question intent 분류 추가:
+  - `latest_from`
+  - `sender_lookup`
+  - `date_lookup`
+  - `top_recent_important`
+  - `general`
+- sender/date/latest 질문을 위한 deterministic retrieval 경로 추가
+- 선택된 source email 결과를 반영하는 result-aware chat cache signature 추가
+- 일반 질문용 optional LangChain runtime retriever 경로 추가
+- 일반 질문은 다음 구성 사용 가능:
+  - MultiQueryRetriever
+  - EnsembleRetriever
+  - `COHERE_API_KEY` 설정 시 optional Cohere rerank compression
+- runtime retriever가 기존 로컬 embedding을 재사용하도록 구성하여 재인덱싱 비용 방지
 
 ### Storage
 
@@ -165,6 +193,17 @@ Long term direction:
 - Added stronger sender matching and sender-prioritized ranking for person-name queries
 - Added latest-email source refinement so newest matching messages rank first
 - Added sender filtering before answer generation for `from <name>` style questions
+- Added email-body cleaning before embedding:
+  - signature stripping
+  - mobile footer stripping
+  - reply-chain removal
+- Added heuristic reranking for received-date questions so actual incoming emails beat self-sent drafts
+- Added recent-important-email scoring for "top N important emails in the last week" style prompts
+- Added LangChain retrieval building blocks:
+  - BM25 + FAISS ensemble
+  - MultiQueryRetriever
+  - SelfQueryRetriever helper
+  - ContextualCompressionRetriever with Cohere rerank helper
 
 - 이메일 1개를 통째로 인덱싱하던 방식 대신 chunking 추가
 - 하이브리드 검색 추가:
@@ -175,6 +214,17 @@ Long term direction:
 - 사람 이름 질문에서 sender 매칭을 더 강하게 반영하도록 ranking 보강
 - 최신 메일 질문에서 최신 matching message가 먼저 오도록 source 정렬 보정
 - `from <name>` 형태 질문에서 답변 생성 전에 sender 필터링 추가
+- embedding 전 email body cleaning 추가:
+  - signature 제거
+  - 모바일 footer 제거
+  - reply chain 제거
+- 수신 날짜 질문에서 self-sent 메일보다 실제 수신 메일을 우선하도록 heuristic reranking 추가
+- "최근 1주일 중요 메일 top N" 스타일 질문을 위한 importance scoring 추가
+- LangChain retrieval 구성 요소 추가:
+  - BM25 + FAISS ensemble
+  - MultiQueryRetriever
+  - SelfQueryRetriever helper
+  - Cohere rerank 기반 ContextualCompressionRetriever helper
 
 ## Current Architecture | 현재 아키텍처
 
@@ -204,6 +254,10 @@ Long term direction:
 - [backend/config.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/config.py)
 - [backend/agents/indexing_agent.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/agents/indexing_agent.py)
 - [backend/agents/chat_agent.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/agents/chat_agent.py)
+- [backend/retrieval/langchain_email_retrievers.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/retrieval/langchain_email_retrievers.py)
+- [backend/retrieval/runtime_retriever.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/retrieval/runtime_retriever.py)
+- [backend/retrieval/email_cleaning.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/retrieval/email_cleaning.py)
+- [backend/scripts/run_multi_query_retriever.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/scripts/run_multi_query_retriever.py)
 - [backend/tools/metadata_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/metadata_store.py)
 - [backend/tools/vector_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/vector_store.py)
 - [backend/tools/cache_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/cache_store.py)
@@ -221,12 +275,16 @@ Long term direction:
 - Gmail OAuth credentials are present
 - OpenAI API key is configured in local `.env`
 - Redis-backed chat cache is configured in local `.env`
+- LangChain retrieval packages are installed in the backend virtual environment
+- Optional LangChain runtime retrieval can be enabled through local `.env`
 
 - 백엔드는 로컬 `http://127.0.0.1:8000` 에서 실행됨
 - 프론트엔드는 로컬 `http://127.0.0.1:5173` 에서 실행됨
 - Gmail OAuth credentials 파일이 존재함
 - OpenAI API 키가 로컬 `.env`에 설정되어 있음
 - Redis 기반 chat cache 설정이 로컬 `.env`에 추가됨
+- LangChain retrieval 패키지가 backend 가상환경에 설치됨
+- optional LangChain runtime retrieval은 로컬 `.env` 플래그로 활성화 가능
 
 ## What Is Not Done Yet | 아직 안 된 것
 
@@ -249,6 +307,11 @@ Long term direction:
 - `latest` / sender-specific question handling is improved, but still partly heuristic
 - Vector store file is large enough that local JSON search remains a performance bottleneck
 - Source cards still show retrieval evidence separately from the main answer, which may need further UX tuning
+- LangChain runtime path is only partially active:
+  - general questions use LangChain retrieval
+  - sender/date/latest questions still rely on deterministic local logic
+- SelfQueryRetriever helper exists, but FAISS-backed runtime wiring is not yet used in production flow
+- Cohere compression is optional and only active when `COHERE_API_KEY` is configured
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
@@ -259,6 +322,11 @@ Long term direction:
 - `latest` / sender 중심 질문 처리는 좋아졌지만 아직 일부 heuristic 기반임
 - vector store 파일이 커져서 로컬 JSON 검색 성능이 계속 병목이 될 수 있음
 - source 카드는 본문 답변과 별도로 표시되며 UX 측면에서 추가 조정 여지가 있음
+- LangChain runtime 경로는 현재 부분 적용 상태:
+  - 일반 질문은 LangChain retrieval 사용
+  - sender/date/latest 질문은 deterministic local logic 유지
+- SelfQueryRetriever helper는 존재하지만 FAISS 기반 runtime production flow에는 아직 미연결
+- Cohere compression은 optional이며 `COHERE_API_KEY`가 있을 때만 활성화됨
 
 ## Recommended Next Steps | 추천 다음 단계
 
@@ -275,6 +343,10 @@ Long term direction:
 ### Priority 2
 
 - Upgrade storage from local JSON vector store to PostgreSQL + pgvector or Qdrant
+- Fully productionize LangChain retrieval routing:
+  - SelfQueryRetriever on a metadata-filter-friendly vector store
+  - Cohere rerank evaluation
+  - retrieval quality A/B comparison
 - Add stronger ranking:
   - sender boosting
   - recency boosting
@@ -282,6 +354,10 @@ Long term direction:
   - attachment and thread-aware ranking
 
 - 로컬 JSON vector store를 PostgreSQL + pgvector 또는 Qdrant로 업그레이드
+- LangChain retrieval routing을 production 수준으로 마무리:
+  - metadata filter 친화적 vector store 위의 SelfQueryRetriever
+  - Cohere rerank 평가
+  - retrieval quality A/B 비교
 - 더 강한 ranking 추가:
   - sender boosting
   - recency boosting

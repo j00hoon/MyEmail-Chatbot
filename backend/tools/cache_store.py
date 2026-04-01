@@ -44,9 +44,9 @@ class CacheStore:
         except RedisError:
             return 0
 
-    def get_chat_response(self, mailbox_id: str, question: str, top_k: int):
+    def get_chat_response(self, mailbox_id: str, cache_signature: str):
         version = self.get_mailbox_version(mailbox_id)
-        payload = self._get(self._chat_key(mailbox_id, version, question, top_k))
+        payload = self._get(self._chat_key(mailbox_id, version, cache_signature))
         if payload is None:
             return None
         try:
@@ -54,22 +54,21 @@ class CacheStore:
         except (ValueError, TypeError):
             return None
 
-    def set_chat_response(self, mailbox_id: str, question: str, top_k: int, response: ChatResponse):
+    def set_chat_response(self, mailbox_id: str, cache_signature: str, response: ChatResponse):
         version = self.get_mailbox_version(mailbox_id)
         self._set(
-            self._chat_key(mailbox_id, version, question, top_k),
+            self._chat_key(mailbox_id, version, cache_signature),
             response.model_dump_json(),
         )
 
-    def _chat_key(self, mailbox_id: str, version: int, question: str, top_k: int):
-        question_hash = hashlib.sha256(question.strip().lower().encode("utf-8")).hexdigest()
+    def _chat_key(self, mailbox_id: str, version: int, cache_signature: str):
+        signature_hash = hashlib.sha256(cache_signature.encode("utf-8")).hexdigest()
         return self._prefixed(
             "chat",
-            "v4",
+            "v5",
             mailbox_id,
             str(version),
-            question_hash,
-            f"topk:{top_k}",
+            signature_hash,
         )
 
     def _mailbox_version_key(self, mailbox_id: str):

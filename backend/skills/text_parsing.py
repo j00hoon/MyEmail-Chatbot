@@ -1,13 +1,15 @@
 import re
 from html import unescape
 
+from retrieval.email_cleaning import clean_email_body_for_embedding
+
 
 class TextParsingSkill:
     max_body_chars = 12000
 
     def execute(self, email):
         attachments = ", ".join(email.attachment_names) if email.attachment_names else "None"
-        cleaned_body = self._clean_text(email.body_text or "")
+        cleaned_body = clean_email_body_for_embedding(self._clean_text(email.body_text or ""))
         cleaned_snippet = self._clean_text(email.snippet or "")
         parts = [
             f"Subject: {email.subject or 'No Subject'}",

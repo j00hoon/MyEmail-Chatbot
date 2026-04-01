@@ -226,7 +226,7 @@ class MetadataStore:
             return []
 
     def _terms(self, query: str):
-        stopwords = {
+        raw_stopwords = {
             "a",
             "about",
             "an",
@@ -272,6 +272,7 @@ class MetadataStore:
             "with",
             "you",
         }
+        stopwords = {self._normalize_term(word) for word in raw_stopwords}
         raw_terms = re.findall(r"[a-zA-Z0-9_]+", query.lower())
         normalized = []
         for term in raw_terms:

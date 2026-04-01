@@ -24,6 +24,7 @@ def _resolve_path(raw_path: str, default_path: Path):
 class Settings:
     app_env: str = os.getenv("APP_ENV", "local")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
+    cohere_api_key: str | None = os.getenv("COHERE_API_KEY")
     openai_chat_model: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-5-mini")
     openai_embedding_model: str = os.getenv(
         "OPENAI_EMBEDDING_MODEL",
@@ -60,6 +61,13 @@ class Settings:
     redis_key_prefix: str = os.getenv("REDIS_KEY_PREFIX", "myemail")
     default_mailbox_id: str = os.getenv("DEFAULT_MAILBOX_ID", "local_default")
     keyword_search_scan_limit: int = int(os.getenv("KEYWORD_SEARCH_SCAN_LIMIT", "0"))
+    langchain_retrieval_enabled: bool = os.getenv("LANGCHAIN_RETRIEVAL_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    langchain_retrieval_top_k: int = int(os.getenv("LANGCHAIN_RETRIEVAL_TOP_K", "8"))
     cors_origins: list[str] = [
         origin.strip()
         for origin in os.getenv(
