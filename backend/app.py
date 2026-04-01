@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,9 @@ chat_agent = ChatAgent(
     cache_store=cache_store,
     mailbox_id=settings.default_mailbox_id,
 )
+
+
+LAST_SUCCESSFUL_SYNC_KEY = "lastSuccessfulSyncAt"
 
 
 @asynccontextmanager
@@ -102,6 +106,10 @@ def sync_gmail(payload: SyncRequest):
         )
         metadata_store.set_sync_value("historyId", ingestion_result.history_id)
         metadata_store.delete_sync_value("pendingHistoryId")
+        metadata_store.set_sync_value(
+            LAST_SUCCESSFUL_SYNC_KEY,
+            datetime.now(timezone.utc).isoformat(),
+        )
         cache_store.bump_mailbox_version(settings.default_mailbox_id)
         sync_progress_store.update(
             run_id,
@@ -155,7 +163,9 @@ def sync_gmail(payload: SyncRequest):
 
 @app.get("/api/sync-status", response_model=SyncStatusResponse)
 def get_sync_status():
-    return sync_progress_store.snapshot()
+    snapshot = sync_progress_store.snapshot()
+    snapshot.last_completed_at = metadata_store.get_sync_value(LAST_SUCCESSFUL_SYNC_KEY)
+    return snapshot
 
 
 @app.get("/api/emails", response_model=list[EmailRecordResponse])

@@ -20,6 +20,7 @@ class SyncStatusResponse(BaseModel):
     fetched_count: int = 0
     saved_count: int = 0
     indexed_count: int = 0
+    last_completed_at: str | None = None
 
 
 class EmailRecordResponse(BaseModel):

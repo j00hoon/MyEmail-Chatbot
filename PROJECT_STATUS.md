@@ -55,6 +55,21 @@ Long term direction:
 - Incremental sync implemented using stored Gmail `historyId`
 - Automatic fallback to full sync when Gmail history expires
 - `sync_meta` table added in SQLite for sync state persistence
+- Gmail OAuth refresh-token revoke/expiry recovery added
+- Last successful sync timestamp is now persisted and exposed through `/api/sync-status`
+- Chat retrieval refined for sender-focused and latest-email questions
+- Redis cache bypass added for latest/sender-specific questions to avoid stale wrong answers
+- Chat cache key version bumped after retrieval logic changes
+- Keyword normalization improved for variants like `vaccine` / `vaccination`
+- Answer format updated to structured fields:
+  - `Answer`
+  - `From`
+  - `Date`
+  - `Subject`
+  - `Summary`
+  - `Attachment`
+- Vector search path optimized to reduce repeated per-record work
+- High-confidence keyword matches can skip vector search for faster responses
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -83,6 +98,21 @@ Long term direction:
 - 저장된 Gmail `historyId` 기반 incremental sync 구현 완료
 - Gmail history 만료 시 full sync fallback 구현 완료
 - SQLite `sync_meta` 테이블로 sync 상태 저장 구현 완료
+- Gmail OAuth refresh token 만료/취소 시 재인증 복구 로직 추가
+- 마지막 성공 sync 시각을 저장하고 `/api/sync-status`로 내려주도록 변경
+- sender 중심 질문과 최신 메일 질문에 대한 chat retrieval 보정 추가
+- 오래된 오답 재사용 방지를 위해 latest/sender 질문은 Redis cache 우회 처리 추가
+- retrieval 로직 변경 이후 chat cache key version 갱신
+- `vaccine` / `vaccination` 같은 형태 차이를 줄이도록 키워드 정규화 강화
+- 답변 포맷을 구조화된 필드 형태로 변경:
+  - `Answer`
+  - `From`
+  - `Date`
+  - `Subject`
+  - `Summary`
+  - `Attachment`
+- vector search에서 반복 계산을 줄이는 최적화 추가
+- 키워드 매칭 신뢰도가 높은 경우 vector search를 생략해 응답 속도 개선
 
 ### Storage
 
@@ -104,6 +134,12 @@ Long term direction:
 - Sync / Chat / Stored Emails sections redesigned
 - User and assistant message colors are visually more distinct
 - Sync progress panel now shows live backend-driven stage/progress/count updates
+- Mailbox card now shows last successful sync timestamp
+- Mailbox card now includes recent question history (last 3 user questions)
+- Source cards below answers are now labeled `Sources`
+- Source cards were visually compacted to feel less like primary answers
+- Mailbox card action layout updated so the sync button sits directly under `MAILBOX`
+- Vite frontend proxy fixed to target backend port `8000`
 
 - React UI를 단순 이메일 리스트 뷰어에서 Gmail AI 워크스페이스 형태로 업그레이드함
 - 보라색 중심 테마 적용
@@ -111,6 +147,12 @@ Long term direction:
 - Sync / Chat / Stored Emails 섹션 리디자인 완료
 - user / assistant 메시지 색상 구분 강화
 - Sync 진행 중 실제 backend 상태 기반 단계/진행률/건수 표시 추가
+- Mailbox 카드에 마지막 성공 sync 시각 표시 추가
+- Mailbox 카드에 최근 질문 히스토리(최근 3개) 추가
+- 답변 아래 source 카드 라벨을 `Sources`로 변경
+- source 카드를 더 컴팩트하게 줄여 주 답변처럼 보이지 않도록 조정
+- Mailbox 카드에서 sync 버튼을 `MAILBOX` 바로 아래로 재배치
+- Vite 프록시가 backend `8000` 포트를 바라보도록 수정
 
 ### Search Quality Improvements
 
@@ -120,6 +162,9 @@ Long term direction:
   - keyword matching
 - Added HTML cleanup during parsing
 - Improved answer prompting so company/topic lookups explicitly list matching emails
+- Added stronger sender matching and sender-prioritized ranking for person-name queries
+- Added latest-email source refinement so newest matching messages rank first
+- Added sender filtering before answer generation for `from <name>` style questions
 
 - 이메일 1개를 통째로 인덱싱하던 방식 대신 chunking 추가
 - 하이브리드 검색 추가:
@@ -127,6 +172,9 @@ Long term direction:
   - 키워드 매칭
 - 파싱 단계에서 HTML 정리 강화
 - 회사명/키워드 질의 시 관련 메일을 명시적으로 나열하도록 답변 프롬프트 개선
+- 사람 이름 질문에서 sender 매칭을 더 강하게 반영하도록 ranking 보강
+- 최신 메일 질문에서 최신 matching message가 먼저 오도록 source 정렬 보정
+- `from <name>` 형태 질문에서 답변 생성 전에 sender 필터링 추가
 
 ## Current Architecture | 현재 아키텍처
 
@@ -150,6 +198,8 @@ Long term direction:
 ## Important Files | 중요한 파일
 
 - [README.md](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/README.md)
+- [start-all.ps1](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/start-all.ps1)
+- [stop-all.ps1](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/stop-all.ps1)
 - [backend/app.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/app.py)
 - [backend/config.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/config.py)
 - [backend/agents/indexing_agent.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/agents/indexing_agent.py)
@@ -157,9 +207,12 @@ Long term direction:
 - [backend/tools/metadata_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/metadata_store.py)
 - [backend/tools/vector_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/vector_store.py)
 - [backend/tools/cache_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/cache_store.py)
+- [backend/tools/gmail_client.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/gmail_client.py)
 - [backend/tools/sync_progress_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/sync_progress_store.py)
+- [backend/skills/answer_generation.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/skills/answer_generation.py)
 - [frontend/src/App.jsx](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/frontend/src/App.jsx)
 - [frontend/src/App.css](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/frontend/src/App.css)
+- [frontend/vite.config.js](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/frontend/vite.config.js)
 
 ## Current Runtime State | 현재 실행 상태
 
@@ -193,6 +246,9 @@ Long term direction:
 - SQLite + JSON store is fine for local demo, but not ideal for full production scale
 - Redis cache is versioned by mailbox and invalidated after sync/index refresh
 - Sync progress UI currently uses polling against `/api/sync-status`
+- `latest` / sender-specific question handling is improved, but still partly heuristic
+- Vector store file is large enough that local JSON search remains a performance bottleneck
+- Source cards still show retrieval evidence separately from the main answer, which may need further UX tuning
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
@@ -200,6 +256,9 @@ Long term direction:
 - SQLite + JSON 구조는 로컬 데모용으로는 괜찮지만 본격 운영용으로는 한계가 있음
 - Redis cache는 mailbox version 기준으로 관리되며 sync/index refresh 후 무효화됨
 - Sync progress UI는 현재 `/api/sync-status` polling 방식으로 동작함
+- `latest` / sender 중심 질문 처리는 좋아졌지만 아직 일부 heuristic 기반임
+- vector store 파일이 커져서 로컬 JSON 검색 성능이 계속 병목이 될 수 있음
+- source 카드는 본문 답변과 별도로 표시되며 UX 측면에서 추가 조정 여지가 있음
 
 ## Recommended Next Steps | 추천 다음 단계
 

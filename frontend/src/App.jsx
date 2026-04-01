@@ -22,9 +22,14 @@ function App() {
     fetched_count: 0,
     saved_count: 0,
     indexed_count: 0,
+    last_completed_at: null,
   })
 
   const isSyncRunning = syncing || syncStatus.state === 'running'
+  const recentQuestions = chatHistory
+    .filter((message) => message.role === 'user')
+    .slice(-3)
+    .reverse()
 
   useEffect(() => {
     if (!isSyncRunning) {
@@ -72,6 +77,7 @@ function App() {
       fetched_count: 0,
       saved_count: 0,
       indexed_count: 0,
+      last_completed_at: syncStatus.last_completed_at,
     })
 
     try {
@@ -121,6 +127,19 @@ function App() {
     }
   }
 
+  const formatLastSyncedAt = (value) => {
+    if (!value) {
+      return 'Last sync: not yet run'
+    }
+
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) {
+      return 'Last sync: unavailable'
+    }
+
+    return `Last sync: ${parsed.toLocaleString()}`
+  }
+
   return (
     <main className="app-shell">
       <header className="simple-header">
@@ -165,6 +184,7 @@ function App() {
                   <p>{message.text}</p>
                   {message.sources?.length ? (
                     <div className="source-list">
+                      <p className="sources-label">Sources</p>
                       {message.sources.map((source) => (
                         <div
                           key={`${source.gmail_message_id}-${source.subject}`}
@@ -203,18 +223,17 @@ function App() {
           <div className="panel-header">
             <div>
               <p className="section-kicker">Mailbox</p>
-              <h2>Refresh Email</h2>
+              <button type="button" onClick={handleSync} disabled={isSyncRunning}>
+                {isSyncRunning ? 'Syncing...' : 'Sync emails'}
+              </button>
+              <p className="sync-timestamp">{formatLastSyncedAt(syncStatus.last_completed_at)}</p>
             </div>
             <span className={`status-pill ${syncStatus.state}`}>{syncStatus.state}</span>
           </div>
 
           <p className="panel-copy">
-            Sync once to load your mailbox, then refresh again anytime to pull changes.
+            Sync once to load your mailbox, then sync again anytime to pull changes.
           </p>
-
-          <button type="button" onClick={handleSync} disabled={isSyncRunning}>
-            {isSyncRunning ? 'Refreshing...' : 'Refresh email'}
-          </button>
 
           {isSyncRunning ? (
             <div className="sync-live-card compact">
@@ -236,12 +255,36 @@ function App() {
                 ? 'Mailbox is up to date.'
                 : syncStatus.state === 'failed'
                   ? syncStatus.detail
-                  : 'No refresh in progress.'}
+                  : 'No sync in progress.'}
             </p>
           )}
 
           {status ? <p className="status success">{status}</p> : null}
           {error ? <p className="status error">{error}</p> : null}
+
+          <section className="question-history">
+            <div className="question-history-header">
+              <p className="section-kicker">Question History</p>
+              <span>{recentQuestions.length}/3</span>
+            </div>
+
+            {recentQuestions.length > 0 ? (
+              <div className="question-history-list">
+                {recentQuestions.map((message, index) => (
+                  <article
+                    key={`recent-question-${index}-${message.text}`}
+                    className="question-history-item"
+                  >
+                    <p>{message.text}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="question-history-empty">
+                Your last 3 questions will appear here.
+              </p>
+            )}
+          </section>
         </aside>
       </section>
 

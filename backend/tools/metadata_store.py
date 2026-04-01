@@ -148,25 +148,26 @@ class MetadataStore:
         terms = self._terms(query)
         if not terms:
             return []
+        normalized_query = self._normalized_query_phrase(query)
 
         records = self.get_emails_for_indexing()
         if scan_limit is not None and scan_limit > 0:
             records = records[:scan_limit]
         scored = []
         for record in records:
-            subject = (record.subject or "").lower()
-            sender = (record.sender or "").lower()
-            recipients = (record.recipients or "").lower()
-            snippet = (record.snippet or "").lower()
-            body_text = (record.body_text or "").lower()
-            attachments = " ".join(record.attachment_names).lower()
+            subject = self._normalize_text(record.subject or "")
+            sender = self._normalize_text(record.sender or "")
+            recipients = self._normalize_text(record.recipients or "")
+            snippet = self._normalize_text(record.snippet or "")
+            body_text = self._normalize_text(record.body_text or "")
+            attachments = self._normalize_text(" ".join(record.attachment_names))
 
             score = 0.0
             for term in terms:
                 if term in subject:
                     score += 3.0
                 if term in sender or term in recipients:
-                    score += 1.5
+                    score += 2.5
                 if term in snippet:
                     score += 2.0
                 if term in attachments:
@@ -177,13 +178,16 @@ class MetadataStore:
             if not score:
                 continue
 
-            exact_query = " ".join(terms)
-            if exact_query and exact_query in subject:
-                score += 2.5
-            elif exact_query and exact_query in snippet:
+            if normalized_query and normalized_query in sender:
+                score += 8.0
+            if normalized_query and normalized_query in recipients:
+                score += 5.0
+            if normalized_query and normalized_query in subject:
+                score += 4.0
+            elif normalized_query and normalized_query in snippet:
+                score += 2.0
+            elif normalized_query and normalized_query in body_text:
                 score += 1.5
-            elif exact_query and exact_query in body_text:
-                score += 1.0
 
             score += self._recency_bonus(record.sent_at)
             scored.append((score, record))
@@ -231,6 +235,8 @@ class MetadataStore:
             "are",
             "can",
             "do",
+            "did",
+            "email",
             "emails",
             "find",
             "for",
@@ -247,7 +253,12 @@ class MetadataStore:
             "of",
             "on",
             "or",
+            "receive",
+            "received",
             "related",
+            "regarding",
+            "latest",
+            "recent",
             "show",
             "tell",
             "that",
@@ -256,6 +267,7 @@ class MetadataStore:
             "to",
             "we",
             "what",
+            "when",
             "which",
             "with",
             "you",
@@ -263,12 +275,54 @@ class MetadataStore:
         raw_terms = re.findall(r"[a-zA-Z0-9_]+", query.lower())
         normalized = []
         for term in raw_terms:
-            if len(term) <= 1 or term in stopwords:
+            normalized_term = self._normalize_term(term)
+            if len(normalized_term) <= 1 or normalized_term in stopwords:
                 continue
-            if term.endswith("s") and len(term) > 4:
-                term = term[:-1]
-            normalized.append(term)
+            normalized.append(normalized_term)
         return list(dict.fromkeys(normalized))
+
+    def _normalized_query_phrase(self, query: str):
+        terms = self._terms(query)
+        if not terms:
+            return ""
+        return " ".join(terms)
+
+    def _normalize_text(self, text: str):
+        tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
+        return " ".join(
+            normalized
+            for normalized in (self._normalize_term(token) for token in tokens)
+            if normalized
+        )
+
+    def _normalize_term(self, term: str):
+        normalized = term.lower().strip()
+        for suffix in (
+            "ations",
+            "ation",
+            "ments",
+            "ment",
+            "tions",
+            "tion",
+            "ings",
+            "ing",
+            "ized",
+            "izes",
+            "ize",
+            "ies",
+            "ied",
+            "ers",
+            "er",
+            "es",
+            "ed",
+            "s",
+        ):
+            if normalized.endswith(suffix) and len(normalized) > len(suffix) + 2:
+                normalized = normalized[: -len(suffix)]
+                break
+        if normalized.endswith("e") and len(normalized) > 5:
+            normalized = normalized[:-1]
+        return normalized
 
     def _recency_bonus(self, sent_at):
         if sent_at is None:

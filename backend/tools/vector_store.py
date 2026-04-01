@@ -13,6 +13,7 @@ class VectorStore:
 
     def __post_init__(self):
         self._records_cache: list[dict] | None = None
+        self._search_records_cache: list[dict] | None = None
         self._cache_lock = Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
@@ -52,13 +53,19 @@ class VectorStore:
         self._save(records)
 
     def search(self, query_embedding: list[float], query_text: str, top_k: int):
-        records = self._load()
+        records = self._load_search_records()
+        query_norm = self._vector_norm(query_embedding)
         query_terms = self._tokenize(query_text)
         scored = []
         for record in records:
-            vector_score = self._cosine_similarity(query_embedding, record["embedding"])
-            keyword_score = self._keyword_score(query_terms, record["metadata"])
-            recency_score = self._recency_score(record["metadata"])
+            vector_score = self._cosine_similarity(
+                query_embedding,
+                record["embedding"],
+                left_norm=query_norm,
+                right_norm=record["embedding_norm"],
+            )
+            keyword_score = self._keyword_score(query_terms, record["search_text"])
+            recency_score = self._recency_score(record["sent_at"])
             score = (vector_score * 0.68) + (keyword_score * 0.24) + (recency_score * 0.08)
             scored.append(
                 {
@@ -77,49 +84,79 @@ class VectorStore:
         with self._cache_lock:
             if self._records_cache is None:
                 self._records_cache = json.loads(self.path.read_text(encoding="utf-8"))
-            return list(self._records_cache)
+            return self._records_cache
+
+    def _load_search_records(self):
+        with self._cache_lock:
+            if self._search_records_cache is None:
+                if self._records_cache is None:
+                    self._records_cache = json.loads(self.path.read_text(encoding="utf-8"))
+                self._search_records_cache = [
+                    {
+                        "id": record["id"],
+                        "embedding": record["embedding"],
+                        "embedding_norm": self._vector_norm(record["embedding"]),
+                        "metadata": record["metadata"],
+                        "search_text": self._build_search_text(record["metadata"]),
+                        "sent_at": record.get("metadata", {}).get("sent_at"),
+                    }
+                    for record in self._records_cache
+                ]
+            return self._search_records_cache
 
     def _save(self, records: list[dict]):
         serialized = json.dumps(records, ensure_ascii=False, indent=2)
         self.path.write_text(serialized, encoding="utf-8")
         with self._cache_lock:
             self._records_cache = list(records)
+            self._search_records_cache = None
 
-    def _cosine_similarity(self, left: list[float], right: list[float]):
+    def _cosine_similarity(
+        self,
+        left: list[float],
+        right: list[float],
+        *,
+        left_norm: float | None = None,
+        right_norm: float | None = None,
+    ):
         if not left or not right:
             return 0.0
         length = min(len(left), len(right))
         dot = sum(left[index] * right[index] for index in range(length))
-        left_norm = math.sqrt(sum(value * value for value in left))
-        right_norm = math.sqrt(sum(value * value for value in right))
+        left_norm = left_norm if left_norm is not None else self._vector_norm(left)
+        right_norm = right_norm if right_norm is not None else self._vector_norm(right)
         if not left_norm or not right_norm:
             return 0.0
         return dot / (left_norm * right_norm)
 
-    def _keyword_score(self, query_terms: set[str], metadata: dict):
+    def _vector_norm(self, values: list[float]):
+        return math.sqrt(sum(value * value for value in values))
+
+    def _keyword_score(self, query_terms: set[str], search_text: str):
         if not query_terms:
             return 0.0
-        subject = metadata.get("subject", "").lower()
-        sender = metadata.get("sender", "").lower()
-        snippet = metadata.get("snippet", "").lower()
-        document = metadata.get("document", "").lower()
-        attachments = " ".join(metadata.get("attachment_names", [])).lower()
 
         score = 0.0
         for term in query_terms:
-            if term in subject:
-                score += 3.0
-            if term in sender:
-                score += 1.0
-            if term in snippet:
-                score += 2.0
-            if term in attachments:
-                score += 1.5
-            if term in document:
+            if term in search_text:
                 score += 1.0
 
-        max_score = max(len(query_terms) * 4.0, 1.0)
+        max_score = max(float(len(query_terms)), 1.0)
         return min(score / max_score, 1.0)
+
+    def _build_search_text(self, metadata: dict):
+        attachment_names = metadata.get("attachment_names", [])
+        if not isinstance(attachment_names, list):
+            attachment_names = []
+        return " \n".join(
+            [
+                str(metadata.get("subject", "")).lower(),
+                str(metadata.get("sender", "")).lower(),
+                str(metadata.get("snippet", "")).lower(),
+                " ".join(str(name).lower() for name in attachment_names),
+                str(metadata.get("document", "")).lower(),
+            ]
+        )
 
     def _tokenize(self, text: str):
         stopwords = {
@@ -169,8 +206,7 @@ class VectorStore:
             tokens.append(token)
         return set(tokens)
 
-    def _recency_score(self, metadata: dict):
-        raw_sent_at = metadata.get("sent_at")
+    def _recency_score(self, raw_sent_at):
         if not raw_sent_at:
             return 0.0
         if isinstance(raw_sent_at, str):

@@ -11,6 +11,8 @@ class AnswerGenerationSkill:
         if not sources:
             return "I could not find any indexed emails that look relevant yet. Try syncing Gmail first."
 
+        primary_source = sources[0]
+
         if settings.openai_api_key:
             client = OpenAI(api_key=settings.openai_api_key)
             context_blocks = []
@@ -35,9 +37,15 @@ class AnswerGenerationSkill:
             joined_context = "\n\n".join(context_blocks)
             prompt = (
                 "You are a personal Gmail assistant. Answer only from the provided email context. "
-                "When the user is looking for emails about a company, topic, sender, or keyword, explicitly name the matching emails first. "
-                "If relevant, summarize the subject, sender, and why each email matches. "
-                "If the answer is uncertain, say so clearly.\n\n"
+                "Choose the single best matching email for the user's question and format the answer exactly with these labels in this order:\n"
+                "Answer:\nFrom:\nDate:\nSubject:\nSummary:\nAttachment:\n\n"
+                "Rules:\n"
+                "- 'Answer' must be a direct 1-2 sentence answer to the user's question.\n"
+                "- 'From', 'Date', and 'Subject' must come from the selected email.\n"
+                "- 'Summary' must be a short plain-English summary of that selected email.\n"
+                "- 'Attachment' must say either 'None' or list the attachment names.\n"
+                "- If the answer is uncertain, say so clearly in 'Answer'.\n"
+                "- Do not add extra headings, bullets, or commentary outside those six labels.\n\n"
                 f"Question:\n{question}\n\n"
                 f"Email Context:\n\n{joined_context}"
             )
@@ -47,14 +55,13 @@ class AnswerGenerationSkill:
             )
             return response.output_text.strip()
 
+        attachment_text = ", ".join(primary_source["attachment_names"]) or "None"
         summary_lines = [
-            "OpenAI API key is not configured, so this is a local retrieval-only summary.",
-            f"Question: {question}",
-            "",
-            "Most relevant emails:",
+            "Answer: I found a matching email in your indexed mailbox.",
+            f"From: {primary_source['sender'] or 'Unknown'}",
+            f"Date: {primary_source['sent_at'] or 'Unknown'}",
+            f"Subject: {primary_source['subject']}",
+            f"Summary: {(primary_source['snippet'] or primary_source['document'] or 'No summary available.')[:280]}",
+            f"Attachment: {attachment_text}",
         ]
-        for source in sources:
-            summary_lines.append(
-                f"- {source['subject']} | from {source['sender'] or 'Unknown'} | {source['snippet'] or 'No snippet'}"
-            )
         return "\n".join(summary_lines)
