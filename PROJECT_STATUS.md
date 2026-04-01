@@ -84,6 +84,14 @@ Long term direction:
   - EnsembleRetriever
   - optional Cohere rerank compression when `COHERE_API_KEY` is configured
 - Runtime retriever reuses stored local embeddings instead of rebuilding vectors from scratch
+- Retrieval logic is now moving toward a 4-step separation:
+  - QueryAnalyzer
+  - RetrievalPlanner
+  - CandidateSelector
+  - AnswerFormatter
+- LangChain retrieval is wired into the live chat path for general questions when enabled
+- General-question runtime path now uses precomputed embeddings with FAISS instead of re-embedding each chunk at runtime
+- LangChain packages were installed into the backend virtual environment and wired through config flags
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -141,6 +149,14 @@ Long term direction:
   - EnsembleRetriever
   - `COHERE_API_KEY` 설정 시 optional Cohere rerank compression
 - runtime retriever가 기존 로컬 embedding을 재사용하도록 구성하여 재인덱싱 비용 방지
+- retrieval 로직을 다음 4단계로 분리하는 방향으로 리팩터링 진행:
+  - QueryAnalyzer
+  - RetrievalPlanner
+  - CandidateSelector
+  - AnswerFormatter
+- 일반 질문은 옵션 활성화 시 LangChain retrieval이 실제 chat 경로에 연결됨
+- 일반 질문 runtime 경로는 chunk를 다시 임베딩하지 않고 precomputed embedding + FAISS를 사용
+- LangChain 관련 패키지를 backend 가상환경에 설치하고 config 플래그로 연결함
 
 ### Storage
 
@@ -204,6 +220,9 @@ Long term direction:
   - MultiQueryRetriever
   - SelfQueryRetriever helper
   - ContextualCompressionRetriever with Cohere rerank helper
+- Added runtime email-body cleaning before indexing to reduce signature/footer/reply-chain noise
+- Added a live runtime retriever layer that can reuse stored vector records directly
+- Added config-driven fallback so deterministic retrieval remains active for sender/date/latest questions
 
 - 이메일 1개를 통째로 인덱싱하던 방식 대신 chunking 추가
 - 하이브리드 검색 추가:
@@ -225,6 +244,9 @@ Long term direction:
   - MultiQueryRetriever
   - SelfQueryRetriever helper
   - Cohere rerank 기반 ContextualCompressionRetriever helper
+- 인덱싱 전 email body cleaning을 실제 runtime path에 연결하여 signature/footer/reply-chain 노이즈 감소
+- 저장된 vector record를 직접 재사용하는 live runtime retriever 레이어 추가
+- sender/date/latest 질문은 deterministic retrieval을 유지하고 일반 질문만 LangChain 경로를 타도록 config-driven fallback 추가
 
 ## Current Architecture | 현재 아키텍처
 
@@ -258,6 +280,7 @@ Long term direction:
 - [backend/retrieval/runtime_retriever.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/retrieval/runtime_retriever.py)
 - [backend/retrieval/email_cleaning.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/retrieval/email_cleaning.py)
 - [backend/scripts/run_multi_query_retriever.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/scripts/run_multi_query_retriever.py)
+- [backend/skills/text_parsing.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/skills/text_parsing.py)
 - [backend/tools/metadata_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/metadata_store.py)
 - [backend/tools/vector_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/vector_store.py)
 - [backend/tools/cache_store.py](/c:/Users/j00ho/OneDrive/Desktop/Baik/Career/myEmail-chatbot/backend/tools/cache_store.py)
@@ -277,6 +300,7 @@ Long term direction:
 - Redis-backed chat cache is configured in local `.env`
 - LangChain retrieval packages are installed in the backend virtual environment
 - Optional LangChain runtime retrieval can be enabled through local `.env`
+- `LANGCHAIN_RETRIEVAL_ENABLED=true` is now used in local runtime for general-question retrieval
 
 - 백엔드는 로컬 `http://127.0.0.1:8000` 에서 실행됨
 - 프론트엔드는 로컬 `http://127.0.0.1:5173` 에서 실행됨
@@ -285,6 +309,7 @@ Long term direction:
 - Redis 기반 chat cache 설정이 로컬 `.env`에 추가됨
 - LangChain retrieval 패키지가 backend 가상환경에 설치됨
 - optional LangChain runtime retrieval은 로컬 `.env` 플래그로 활성화 가능
+- 로컬 실행에서는 `LANGCHAIN_RETRIEVAL_ENABLED=true`로 일반 질문 retrieval에 적용 중
 
 ## What Is Not Done Yet | 아직 안 된 것
 
@@ -312,6 +337,8 @@ Long term direction:
   - sender/date/latest questions still rely on deterministic local logic
 - SelfQueryRetriever helper exists, but FAISS-backed runtime wiring is not yet used in production flow
 - Cohere compression is optional and only active when `COHERE_API_KEY` is configured
+- Multi-email summary/list questions are still not fully modeled by the new planner structure and need explicit retrieval-contract handling
+- Current chat path still mixes legacy heuristics with the new planner-oriented direction, so the refactor is in progress rather than fully complete
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
@@ -327,6 +354,8 @@ Long term direction:
   - sender/date/latest 질문은 deterministic local logic 유지
 - SelfQueryRetriever helper는 존재하지만 FAISS 기반 runtime production flow에는 아직 미연결
 - Cohere compression은 optional이며 `COHERE_API_KEY`가 있을 때만 활성화됨
+- multi-email summary/list 질문은 아직 새 planner 구조에 완전히 편입되지 않아 retrieval contract 보강이 필요함
+- 현재 chat path는 legacy heuristic과 planner 지향 구조가 혼재된 상태라, 리팩터링이 진행 중인 단계임
 
 ## Recommended Next Steps | 추천 다음 단계
 
