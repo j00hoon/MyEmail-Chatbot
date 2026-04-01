@@ -6,6 +6,8 @@ from config import settings
 class AnswerGenerationSkill:
     max_source_chars = 2500
     max_total_context_chars = 8000
+    multi_email_source_chars = 550
+    multi_email_total_context_chars = 16000
 
     def execute(self, question: str, sources: list[dict], answer_mode: str = "single_email"):
         if not sources:
@@ -17,8 +19,23 @@ class AnswerGenerationSkill:
             client = OpenAI(api_key=settings.openai_api_key)
             context_blocks = []
             total_context_chars = 0
+            per_source_chars = (
+                self.multi_email_source_chars
+                if answer_mode == "multi_email"
+                else self.max_source_chars
+            )
+            max_total_chars = (
+                self.multi_email_total_context_chars
+                if answer_mode == "multi_email"
+                else self.max_total_context_chars
+            )
             for index, source in enumerate(sources, start=1):
-                trimmed_document = (source["document"] or "")[: self.max_source_chars]
+                content_source = (
+                    source["snippet"]
+                    if answer_mode == "multi_email" and source.get("snippet")
+                    else source["document"]
+                ) or source["document"] or source["snippet"] or ""
+                trimmed_document = content_source[:per_source_chars]
                 block = "\n".join(
                     [
                         f"Source {index}",
@@ -29,7 +46,7 @@ class AnswerGenerationSkill:
                         f"Content: {trimmed_document}",
                     ]
                 )
-                if total_context_chars + len(block) > self.max_total_context_chars:
+                if total_context_chars + len(block) > max_total_chars:
                     break
                 context_blocks.append(block)
                 total_context_chars += len(block)
@@ -70,6 +87,7 @@ class AnswerGenerationSkill:
                 "- 'Answer' should summarize what these emails represent overall.\n"
                 "- Each email block must keep the exact labels shown above.\n"
                 "- 'Attachment' must say either 'None' or list attachment names.\n"
+                "- If multiple sources are provided, use them all in order unless you truly received fewer sources.\n"
                 "- Do not add bullets or commentary outside this structure.\n\n"
                 f"Question:\n{question}\n\n"
                 f"Email Context:\n\n{joined_context}"

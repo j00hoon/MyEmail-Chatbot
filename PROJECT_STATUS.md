@@ -89,6 +89,10 @@ Long term direction:
   - RetrievalPlanner
   - CandidateSelector
   - AnswerFormatter
+- `QueryAnalyzer`, `RetrievalPlanner`, and `CandidateSelector` are now added as concrete runtime modules for query routing
+- Recent multi-email requests such as "latest 10 emails" now use deterministic recent-email selection instead of generic retrieval
+- Multi-email answer generation now uses a larger context budget so more selected emails can actually reach the LLM
+- Chat cache key version bumped again after retrieval-contract changes
 - LangChain retrieval is wired into the live chat path for general questions when enabled
 - General-question runtime path now uses precomputed embeddings with FAISS instead of re-embedding each chunk at runtime
 - LangChain packages were installed into the backend virtual environment and wired through config flags
@@ -154,6 +158,10 @@ Long term direction:
   - RetrievalPlanner
   - CandidateSelector
   - AnswerFormatter
+- `QueryAnalyzer`, `RetrievalPlanner`, `CandidateSelector`를 실제 runtime 모듈로 추가하여 질문 라우팅에 사용하기 시작함
+- "latest 10 emails" 같은 최근 다중 메일 요청은 generic retrieval 대신 deterministic recent-email selection 경로를 타도록 변경
+- multi-email 답변 생성 시 더 많은 선택 메일이 실제 LLM 컨텍스트에 들어가도록 context budget 확대
+- retrieval contract 변경에 맞춰 chat cache key version을 다시 갱신
 - 일반 질문은 옵션 활성화 시 LangChain retrieval이 실제 chat 경로에 연결됨
 - 일반 질문 runtime 경로는 chunk를 다시 임베딩하지 않고 precomputed embedding + FAISS를 사용
 - LangChain 관련 패키지를 backend 가상환경에 설치하고 config 플래그로 연결함
@@ -183,6 +191,7 @@ Long term direction:
 - Source cards below answers are now labeled `Sources`
 - Source cards were visually compacted to feel less like primary answers
 - Mailbox card action layout updated so the sync button sits directly under `MAILBOX`
+- Ask Inbox waiting state now shows a visible spinner in the button and a live assistant thinking bubble in the chat area
 - Vite frontend proxy fixed to target backend port `8000`
 
 - React UI를 단순 이메일 리스트 뷰어에서 Gmail AI 워크스페이스 형태로 업그레이드함
@@ -196,6 +205,7 @@ Long term direction:
 - 답변 아래 source 카드 라벨을 `Sources`로 변경
 - source 카드를 더 컴팩트하게 줄여 주 답변처럼 보이지 않도록 조정
 - Mailbox 카드에서 sync 버튼을 `MAILBOX` 바로 아래로 재배치
+- Ask Inbox 대기 상태에서 버튼 spinner와 채팅창 assistant thinking bubble이 보이도록 UI 강화
 - Vite 프록시가 backend `8000` 포트를 바라보도록 수정
 
 ### Search Quality Improvements
@@ -223,6 +233,8 @@ Long term direction:
 - Added runtime email-body cleaning before indexing to reduce signature/footer/reply-chain noise
 - Added a live runtime retriever layer that can reuse stored vector records directly
 - Added config-driven fallback so deterministic retrieval remains active for sender/date/latest questions
+- Added deterministic recent-email-list retrieval for latest multi-email summary requests
+- Fixed a parser bug where phrases like `from the latest 10 emails` could be misread as a sender filter
 
 - 이메일 1개를 통째로 인덱싱하던 방식 대신 chunking 추가
 - 하이브리드 검색 추가:
@@ -247,6 +259,8 @@ Long term direction:
 - 인덱싱 전 email body cleaning을 실제 runtime path에 연결하여 signature/footer/reply-chain 노이즈 감소
 - 저장된 vector record를 직접 재사용하는 live runtime retriever 레이어 추가
 - sender/date/latest 질문은 deterministic retrieval을 유지하고 일반 질문만 LangChain 경로를 타도록 config-driven fallback 추가
+- latest 다중 이메일 요약 요청을 위한 deterministic recent-email-list retrieval 추가
+- `from the latest 10 emails` 같은 문구가 sender filter로 잘못 해석되던 파서 버그 수정
 
 ## Current Architecture | 현재 아키텍처
 
@@ -339,6 +353,7 @@ Long term direction:
 - Cohere compression is optional and only active when `COHERE_API_KEY` is configured
 - Multi-email summary/list questions are still not fully modeled by the new planner structure and need explicit retrieval-contract handling
 - Current chat path still mixes legacy heuristics with the new planner-oriented direction, so the refactor is in progress rather than fully complete
+- Recent-email list requests are now covered, but broader list/filter combinations still need to be folded into the planner consistently
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
@@ -354,8 +369,8 @@ Long term direction:
   - sender/date/latest 질문은 deterministic local logic 유지
 - SelfQueryRetriever helper는 존재하지만 FAISS 기반 runtime production flow에는 아직 미연결
 - Cohere compression은 optional이며 `COHERE_API_KEY`가 있을 때만 활성화됨
-- multi-email summary/list 질문은 아직 새 planner 구조에 완전히 편입되지 않아 retrieval contract 보강이 필요함
 - 현재 chat path는 legacy heuristic과 planner 지향 구조가 혼재된 상태라, 리팩터링이 진행 중인 단계임
+- recent-email list 요청은 반영됐지만, 더 다양한 list/filter 조합은 planner 구조로 계속 편입이 필요함
 
 ## Recommended Next Steps | 추천 다음 단계
 

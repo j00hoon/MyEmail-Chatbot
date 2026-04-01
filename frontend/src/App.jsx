@@ -199,6 +199,19 @@ function App() {
                 </article>
               ))
             )}
+            {chatting ? (
+              <article className="message-bubble assistant thinking-bubble" aria-live="polite">
+                <p className="message-role">assistant</p>
+                <div className="thinking-row">
+                  <div className="thinking-dots" aria-hidden="true">
+                    <span className="thinking-dot" />
+                    <span className="thinking-dot" />
+                    <span className="thinking-dot" />
+                  </div>
+                  <p>Searching your inbox and drafting an answer...</p>
+                </div>
+              </article>
+            ) : null}
           </div>
 
           <div className="chat-controls">
@@ -213,7 +226,12 @@ function App() {
                 Answers are grounded in indexed Gmail messages, not generic chat memory.
               </p>
               <button type="button" onClick={handleAsk} disabled={chatting}>
-                {chatting ? 'Thinking...' : 'Ask inbox'}
+                {chatting ? (
+                  <>
+                    <span className="button-spinner" aria-hidden="true" />
+                    Thinking
+                  </>
+                ) : 'Ask inbox'}
               </button>
             </div>
           </div>

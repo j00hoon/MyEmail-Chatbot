@@ -65,7 +65,7 @@ class CacheStore:
         signature_hash = hashlib.sha256(cache_signature.encode("utf-8")).hexdigest()
         return self._prefixed(
             "chat",
-            "v5",
+            "v6",
             mailbox_id,
             str(version),
             signature_hash,

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from config import settings
+from retrieval.mailbox_query import CandidateSelector, QueryAnalyzer, RetrievalPlanner
 from retrieval.runtime_retriever import build_runtime_retriever
 from schemas import ChatResponse, SourceReference
 from skills.answer_generation import AnswerGenerationSkill
@@ -32,6 +33,9 @@ class ChatAgent:
     mailbox_id: str = "local_default"
     _runtime_retriever = None
     _runtime_retriever_signature: tuple[int, int] | None = None
+    _query_analyzer: QueryAnalyzer = QueryAnalyzer()
+    _retrieval_planner: RetrievalPlanner = RetrievalPlanner()
+    _candidate_selector: CandidateSelector = CandidateSelector()
 
     def run(self, question: str, top_k: int = 4):
         if not question.strip():
@@ -52,7 +56,7 @@ class ChatAgent:
         answer = AnswerGenerationSkill().execute(
             question=question,
             sources=sources,
-            answer_mode=("multi_email" if intent.kind == "top_recent_important" else "single_email"),
+            answer_mode=("multi_email" if intent.kind in {"top_recent_important", "recent_email_list"} else "single_email"),
         )
 
         response = ChatResponse(
@@ -79,51 +83,20 @@ class ChatAgent:
         return response
 
     def _classify_question(self, question: str, top_k: int):
-        lowered = question.lower().strip()
-        normalized_question = self._normalize_question(question)
-        sender_query = self._extract_sender_query(question)
-        latest_question = self._is_latest_question(question)
-
-        important_match = re.search(r"\b(?:top|select)\s+(\d+)\b", lowered)
-        if (
-            important_match
-            and "important" in lowered
-            and any(term in lowered for term in ("last one week", "last week", "past week", "7 day", "7-day"))
-        ):
-            return QuestionIntent(
-                kind="top_recent_important",
-                normalized_question=normalized_question,
-                requested_count=max(1, min(int(important_match.group(1)), 10)),
-                window_days=7,
-            )
-
-        if sender_query and latest_question:
-            return QuestionIntent(
-                kind="latest_from",
-                normalized_question=normalized_question,
-                sender_query=sender_query,
-            )
-
-        if sender_query:
-            return QuestionIntent(
-                kind="sender_lookup",
-                normalized_question=normalized_question,
-                sender_query=sender_query,
-            )
-
-        if any(phrase in lowered for phrase in ("when did", "what date", "on what date", "when was")):
-            return QuestionIntent(
-                kind="date_lookup",
-                normalized_question=normalized_question,
-            )
-
+        analysis = self._query_analyzer.analyze(question=question, default_count=top_k)
+        plan = self._retrieval_planner.build(analysis)
         return QuestionIntent(
-            kind="general",
-            normalized_question=normalized_question,
-            requested_count=top_k,
+            kind=plan.kind,
+            normalized_question=plan.normalized_question,
+            sender_query=plan.sender_query,
+            requested_count=plan.requested_count,
+            window_days=plan.window_days,
         )
 
     def _retrieve_sources(self, question: str, intent: QuestionIntent, top_k: int):
+        if intent.kind == "recent_email_list":
+            return self._retrieve_recent_email_list(intent=intent)
+
         langchain_sources = self._retrieve_with_langchain(question=question, intent=intent, top_k=top_k)
         if langchain_sources:
             return langchain_sources
@@ -135,6 +108,18 @@ class ChatAgent:
         if intent.kind == "top_recent_important":
             return self._retrieve_top_recent_important(intent=intent)
         return self._retrieve_hybrid_sources(question=question, intent=intent, top_k=top_k)
+
+    def _retrieve_recent_email_list(self, intent: QuestionIntent):
+        records = self.metadata_store.get_emails_for_indexing()
+        selected = self._candidate_selector.select_recent_emails(
+            records=records,
+            requested_count=intent.requested_count,
+            window_days=intent.window_days,
+        )
+        return [
+            self._source_from_record(record, score=1.0)
+            for record in selected
+        ]
 
     def _retrieve_with_langchain(self, question: str, intent: QuestionIntent, top_k: int):
         if intent.kind != "general":
@@ -417,7 +402,12 @@ class ChatAgent:
             for token in candidate.split()
             if token not in {"the", "a", "an", "latest", "recent", "newest", "last", "email", "emails"}
         ]
-        return " ".join(tokens).strip()
+        sender_query = " ".join(tokens).strip()
+        if not sender_query:
+            return ""
+        if not re.search(r"[a-z@]", sender_query):
+            return ""
+        return sender_query
 
     def _normalize_question(self, text: str):
         tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
