@@ -24,6 +24,7 @@ class GmailEmailPayload:
     sender: str | None
     recipients: str | None
     sent_at: str | None
+    gmail_category: str | None
     snippet: str
     body_text: str
     attachment_names: list[str]
@@ -237,6 +238,7 @@ class GmailClient:
     def _parse_email(self, detail: dict[str, Any]):
         payload = detail.get("payload", {})
         headers = payload.get("headers", [])
+        label_ids = detail.get("labelIds", [])
         subject = self._get_header(headers, "Subject") or "No Subject"
         sender = self._get_header(headers, "From")
         recipients = self._get_header(headers, "To")
@@ -252,6 +254,7 @@ class GmailClient:
             sender=sender,
             recipients=recipients,
             sent_at=sent_at,
+            gmail_category=self._map_gmail_category(label_ids),
             snippet=detail.get("snippet", ""),
             body_text=body_text,
             attachment_names=attachment_names,
@@ -287,3 +290,17 @@ class GmailClient:
         walk(payload)
         body_text = "\n".join(segment.strip() for segment in body_segments if segment.strip())
         return body_text, attachment_names
+
+    def _map_gmail_category(self, label_ids: list[str] | None):
+        label_map = {
+            "CATEGORY_PERSONAL": "primary",
+            "CATEGORY_PROMOTIONS": "promotions",
+            "CATEGORY_SOCIAL": "social",
+            "CATEGORY_UPDATES": "updates",
+            "CATEGORY_FORUMS": "forums",
+        }
+        for label_id in label_ids or []:
+            mapped = label_map.get(label_id)
+            if mapped:
+                return mapped
+        return "uncategorized"

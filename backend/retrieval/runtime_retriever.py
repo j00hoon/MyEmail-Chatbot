@@ -65,6 +65,7 @@ def build_runtime_retriever(vector_records: list[dict]):
                 "gmail_message_id": metadata.get("gmail_message_id"),
                 "sender": metadata.get("sender"),
                 "date": metadata.get("sent_at"),
+                "gmail_category": metadata.get("gmail_category"),
                 "subject": metadata.get("subject"),
                 "attachment_names": metadata.get("attachment_names", []),
                 "chunk_id": record.get("id"),

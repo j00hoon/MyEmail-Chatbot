@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,48 +10,78 @@ from threading import Lock
 
 @dataclass
 class VectorStore:
-    path: Path
+    database_url: str
+    legacy_path: Path | None = None
 
     def __post_init__(self):
         self._records_cache: list[dict] | None = None
         self._search_records_cache: list[dict] | None = None
         self._cache_lock = Lock()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self.path.write_text("[]", encoding="utf-8")
+        self.db_path = self._resolve_sqlite_path(self.database_url)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_schema()
+        self._migrate_legacy_file_if_needed()
 
     def upsert(self, item_id: str, embedding: list[float], metadata: dict):
-        records = self._load()
-        records = [record for record in records if record["id"] != item_id]
-        records.append({"id": item_id, "embedding": embedding, "metadata": metadata})
-        self._save(records)
+        self.replace_for_email_ids(
+            email_ids=[int(metadata["email_id"])] if metadata.get("email_id") is not None else [],
+            new_records=[{"id": item_id, "embedding": embedding, "metadata": metadata}],
+        )
 
     def replace_for_email_ids(self, email_ids: list[int], new_records: list[dict]):
-        records = self._load()
-        if email_ids:
-            target_ids = {str(email_id) for email_id in email_ids}
-            records = [
-                record
-                for record in records
-                if str(record.get("metadata", {}).get("email_id")) not in target_ids
+        with self._connect() as connection:
+            if email_ids:
+                placeholders = ",".join("?" for _ in email_ids)
+                connection.execute(
+                    f"DELETE FROM email_vectors WHERE email_id IN ({placeholders})",
+                    [int(email_id) for email_id in email_ids],
+                )
+
+            payloads = [
+                (
+                    record["id"],
+                    int(record.get("metadata", {}).get("email_id") or 0),
+                    record.get("metadata", {}).get("gmail_message_id", ""),
+                    record.get("metadata", {}).get("sent_at"),
+                    json.dumps(record["embedding"], ensure_ascii=False),
+                    json.dumps(record["metadata"], ensure_ascii=False),
+                )
+                for record in new_records
             ]
-        records.extend(new_records)
-        self._save(records)
+            if payloads:
+                connection.executemany(
+                    """
+                    INSERT OR REPLACE INTO email_vectors (
+                        chunk_id,
+                        email_id,
+                        gmail_message_id,
+                        sent_at,
+                        embedding_json,
+                        metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    payloads,
+                )
+            connection.commit()
+        self._invalidate_cache()
 
     def clear(self):
-        self._save([])
+        with self._connect() as connection:
+            connection.execute("DELETE FROM email_vectors")
+            connection.commit()
+        self._invalidate_cache()
 
     def delete_by_email_ids(self, email_ids: list[int]):
         if not email_ids:
             return
-        allowed = {str(email_id) for email_id in email_ids}
-        records = self._load()
-        records = [
-            record
-            for record in records
-            if str(record.get("metadata", {}).get("email_id")) not in allowed
-        ]
-        self._save(records)
+        with self._connect() as connection:
+            placeholders = ",".join("?" for _ in email_ids)
+            connection.execute(
+                f"DELETE FROM email_vectors WHERE email_id IN ({placeholders})",
+                [int(email_id) for email_id in email_ids],
+            )
+            connection.commit()
+        self._invalidate_cache()
 
     def search(self, query_embedding: list[float], query_text: str, top_k: int):
         records = self._load_search_records()
@@ -86,14 +117,44 @@ class VectorStore:
     def _load(self):
         with self._cache_lock:
             if self._records_cache is None:
-                self._records_cache = json.loads(self.path.read_text(encoding="utf-8"))
+                with self._connect() as connection:
+                    rows = connection.execute(
+                        """
+                        SELECT chunk_id, embedding_json, metadata_json
+                        FROM email_vectors
+                        ORDER BY rowid
+                        """
+                    ).fetchall()
+                self._records_cache = [
+                    {
+                        "id": row["chunk_id"],
+                        "embedding": json.loads(row["embedding_json"]),
+                        "metadata": json.loads(row["metadata_json"]),
+                    }
+                    for row in rows
+                ]
             return self._records_cache
 
     def _load_search_records(self):
         with self._cache_lock:
             if self._search_records_cache is None:
                 if self._records_cache is None:
-                    self._records_cache = json.loads(self.path.read_text(encoding="utf-8"))
+                    with self._connect() as connection:
+                        rows = connection.execute(
+                            """
+                            SELECT chunk_id, embedding_json, metadata_json
+                            FROM email_vectors
+                            ORDER BY rowid
+                            """
+                        ).fetchall()
+                    self._records_cache = [
+                        {
+                            "id": row["chunk_id"],
+                            "embedding": json.loads(row["embedding_json"]),
+                            "metadata": json.loads(row["metadata_json"]),
+                        }
+                        for row in rows
+                    ]
                 self._search_records_cache = [
                     {
                         "id": record["id"],
@@ -107,12 +168,99 @@ class VectorStore:
                 ]
             return self._search_records_cache
 
-    def _save(self, records: list[dict]):
-        serialized = json.dumps(records, ensure_ascii=False, indent=2)
-        self.path.write_text(serialized, encoding="utf-8")
+    def _ensure_schema(self):
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS email_vectors (
+                    chunk_id TEXT PRIMARY KEY,
+                    email_id INTEGER NOT NULL,
+                    gmail_message_id TEXT,
+                    sent_at TEXT,
+                    embedding_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_email_vectors_email_id ON email_vectors (email_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_email_vectors_gmail_message_id ON email_vectors (gmail_message_id)"
+            )
+            connection.commit()
+
+    def _migrate_legacy_file_if_needed(self):
+        if self.legacy_path is None or not self.legacy_path.exists():
+            return
+
+        with self._connect() as connection:
+            existing_count = connection.execute(
+                "SELECT COUNT(*) FROM email_vectors"
+            ).fetchone()[0]
+            if existing_count:
+                return
+
+        try:
+            records = json.loads(self.legacy_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        payloads = []
+        for record in records:
+            metadata = record.get("metadata", {})
+            email_id = int(metadata.get("email_id") or 0)
+            if not email_id:
+                continue
+            payloads.append(
+                (
+                    record.get("id", ""),
+                    email_id,
+                    metadata.get("gmail_message_id", ""),
+                    metadata.get("sent_at"),
+                    json.dumps(record.get("embedding", []), ensure_ascii=False),
+                    json.dumps(metadata, ensure_ascii=False),
+                )
+            )
+
+        if not payloads:
+            return
+
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO email_vectors (
+                    chunk_id,
+                    email_id,
+                    gmail_message_id,
+                    sent_at,
+                    embedding_json,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                payloads,
+            )
+            connection.commit()
+        self._invalidate_cache()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL;")
+        connection.execute("PRAGMA synchronous=NORMAL;")
+        connection.execute("PRAGMA busy_timeout=30000;")
+        return connection
+
+    def _invalidate_cache(self):
         with self._cache_lock:
-            self._records_cache = list(records)
+            self._records_cache = None
             self._search_records_cache = None
+
+    def _resolve_sqlite_path(self, database_url: str):
+        if not database_url.startswith("sqlite:///"):
+            raise ValueError("VectorStore requires a sqlite:/// database URL.")
+        return Path(database_url.replace("sqlite:///", "", 1))
 
     def _cosine_similarity(
         self,
@@ -213,8 +361,11 @@ class VectorStore:
         if not raw_sent_at:
             return 0.0
         if isinstance(raw_sent_at, str):
+            normalized = raw_sent_at.strip()
+            if " (" in normalized:
+                normalized = normalized.split(" (", 1)[0]
             try:
-                sent_at = datetime.fromisoformat(raw_sent_at.replace("Z", "+00:00"))
+                sent_at = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
             except ValueError:
                 return 0.0
         else:

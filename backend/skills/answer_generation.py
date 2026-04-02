@@ -15,6 +15,9 @@ class AnswerGenerationSkill:
 
         primary_source = sources[0]
 
+        if answer_mode == "multi_email" and self._is_sender_list_request(question):
+            return self._format_sender_list_answer(question=question, sources=sources)
+
         if settings.openai_api_key:
             client = OpenAI(api_key=settings.openai_api_key)
             context_blocks = []
@@ -121,6 +124,31 @@ class AnswerGenerationSkill:
                     f"Date: {source['sent_at'] or 'Unknown'}",
                     f"Subject: {source['subject']}",
                     f"Summary: {(source['snippet'] or source['document'] or 'No summary available.')[:220]}",
+                    f"Attachment: {attachment_text}",
+                ]
+            )
+        return "\n".join(lines)
+
+    def _is_sender_list_request(self, question: str):
+        lowered = question.lower()
+        return (
+            ("sender" in lowered or "who sent" in lowered or "from whom" in lowered)
+            and any(term in lowered for term in ("latest", "recent", "newest", "last"))
+        )
+
+    def _format_sender_list_answer(self, question: str, sources: list[dict]):
+        lines = [
+            f"Answer: Here are the sender names for the latest {len(sources)} emails that matched your filter.",
+        ]
+        for index, source in enumerate(sources, start=1):
+            attachment_text = ", ".join(source["attachment_names"]) or "None"
+            lines.extend(
+                [
+                    f"Email {index}",
+                    f"From: {source['sender'] or 'Unknown'}",
+                    f"Date: {source['sent_at'] or 'Unknown'}",
+                    f"Subject: {source['subject']}",
+                    f"Summary: {(source['snippet'] or source['document'] or 'No summary available.')[:180]}",
                     f"Attachment: {attachment_text}",
                 ]
             )

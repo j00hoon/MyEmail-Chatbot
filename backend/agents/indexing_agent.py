@@ -69,6 +69,7 @@ class IndexingAgent:
                                 "subject": email.subject,
                                 "sender": email.sender,
                                 "sent_at": email.sent_at,
+                                "gmail_category": email.gmail_category,
                                 "snippet": email.snippet,
                                 "attachment_names": email.attachment_names,
                                 "document": chunk,

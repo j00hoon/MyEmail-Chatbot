@@ -52,6 +52,7 @@ def build_email_documents(email_chunks: Iterable[dict]) -> list:
                     "gmail_message_id": chunk.get("gmail_message_id"),
                     "sender": chunk.get("sender"),
                     "date": chunk.get("date"),
+                    "gmail_category": chunk.get("gmail_category"),
                     "subject": chunk.get("subject"),
                     "attachment_names": chunk.get("attachment_names", []),
                     "chunk_id": chunk.get("chunk_id"),
@@ -145,6 +146,11 @@ def build_email_self_query_retriever(vectorstore, llm, *, search_kwargs: dict | 
         AttributeInfo(
             name="subject",
             description="The email subject line",
+            type="string",
+        ),
+        AttributeInfo(
+            name="gmail_category",
+            description="The Gmail category bucket such as primary, promotions, social, or updates",
             type="string",
         ),
     ]

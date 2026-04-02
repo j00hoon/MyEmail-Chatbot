@@ -4,6 +4,11 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 
+SENDER_DELIMITER_PATTERN = re.compile(
+    r"\b(?:regarding|about|re\b|subject\b|with\b|within\b|whose\b|that\b|which\b|during\b|over\b|for\b|and\s+(?:give|show|tell|summarize|read)\b)\b"
+)
+
+
 @dataclass
 class QueryAnalysis:
     normalized_question: str
@@ -67,7 +72,19 @@ class QueryAnalyzer:
 
     def _extract_window_days(self, question: str):
         lowered = question.lower()
-        if any(term in lowered for term in ("last one week", "last week", "past week", "7 day", "7-day")):
+        if any(
+            term in lowered
+            for term in (
+                "last one week",
+                "last week",
+                "past week",
+                "within a week",
+                "within one week",
+                "within the week",
+                "7 day",
+                "7-day",
+            )
+        ):
             return 7
         return None
 
@@ -77,7 +94,9 @@ class QueryAnalyzer:
         if not match:
             return ""
 
-        candidate = re.sub(r"[^a-z0-9@\.\s_-]", " ", match.group(1))
+        candidate = match.group(1)
+        candidate = SENDER_DELIMITER_PATTERN.split(candidate, maxsplit=1)[0]
+        candidate = re.sub(r"[^a-z0-9@\.\s_-]", " ", candidate)
         tokens = [
             token
             for token in candidate.split()
@@ -123,6 +142,8 @@ class RetrievalPlanner:
                 kind="latest_from",
                 normalized_question=analysis.normalized_question,
                 sender_query=analysis.sender_query,
+                requested_count=analysis.requested_count,
+                window_days=analysis.window_days,
             )
 
         if analysis.sender_query:
@@ -130,6 +151,9 @@ class RetrievalPlanner:
                 kind="sender_lookup",
                 normalized_question=analysis.normalized_question,
                 sender_query=analysis.sender_query,
+                requested_count=analysis.requested_count,
+                window_days=analysis.window_days,
+                answer_mode=("multi_email" if analysis.references_emails and (analysis.wants_list or analysis.wants_summary or analysis.window_days is not None or analysis.requested_count > 1) else "single_email"),
             )
 
         if analysis.asks_for_date:

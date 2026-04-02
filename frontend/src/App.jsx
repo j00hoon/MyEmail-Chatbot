@@ -6,9 +6,197 @@ const api = axios.create({
   baseURL: '/',
 })
 
+const CATEGORY_OPTIONS = [
+  { id: 'primary', label: 'Primary' },
+  { id: 'promotions', label: 'Promotions' },
+  { id: 'social', label: 'Social' },
+  { id: 'updates', label: 'Updates' },
+]
+
+const RESPONSE_LABELS = ['Answer', 'From', 'Date', 'Subject', 'Summary', 'Attachment']
+
+function parseAssistantAnswer(text) {
+  const normalized = (text || '').replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return null
+  }
+
+  const lines = normalized.split('\n')
+  const sections = []
+  let currentSection = null
+  let currentField = null
+
+  const pushSection = () => {
+    if (!currentSection) {
+      return
+    }
+
+    const cleanedFields = Object.fromEntries(
+      Object.entries(currentSection.fields)
+        .map(([key, value]) => [key, value.trim()])
+        .filter(([, value]) => value),
+    )
+
+    if (currentSection.title || Object.keys(cleanedFields).length > 0) {
+      sections.push({
+        title: currentSection.title,
+        fields: cleanedFields,
+      })
+    }
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+
+    if (!line) {
+      if (currentField && currentSection) {
+        currentSection.fields[currentField] += '\n'
+      }
+      continue
+    }
+
+    if (/^Email\s+\d+$/i.test(line)) {
+      pushSection()
+      currentSection = { title: line, fields: {} }
+      currentField = null
+      continue
+    }
+
+    const inlineLabelMatch = line.match(/^(Answer|From|Date|Subject|Summary|Attachment):\s*(.*)$/)
+    if (inlineLabelMatch) {
+      if (!currentSection) {
+        currentSection = { title: '', fields: {} }
+      }
+      currentField = inlineLabelMatch[1]
+      currentSection.fields[currentField] = inlineLabelMatch[2] || ''
+      continue
+    }
+
+    if (!currentSection) {
+      currentSection = { title: '', fields: { Answer: '' } }
+      currentField = 'Answer'
+    }
+
+    if (!currentField) {
+      currentField = 'Answer'
+      currentSection.fields[currentField] = currentSection.fields[currentField] || ''
+    }
+
+    currentSection.fields[currentField] = currentSection.fields[currentField]
+      ? `${currentSection.fields[currentField]}\n${line}`
+      : line
+  }
+
+  pushSection()
+
+  if (!sections.length) {
+    return null
+  }
+
+  const [summarySection, ...detailSections] = sections
+  const cleanedDetails = detailSections
+    .map((section) => ({
+      title: section.title,
+      from: section.fields.From || '',
+      date: section.fields.Date || '',
+      subject: section.fields.Subject || '',
+      summary: section.fields.Summary || '',
+      attachment: section.fields.Attachment || '',
+    }))
+    .filter((detail) => detail.from || detail.date || detail.subject || detail.summary || detail.attachment)
+
+  return {
+    summary: summarySection.fields.Answer || '',
+    introMeta: {
+      from: summarySection.fields.From || '',
+      date: summarySection.fields.Date || '',
+      subject: summarySection.fields.Subject || '',
+      attachment: summarySection.fields.Attachment || '',
+      summary: summarySection.fields.Summary || '',
+    },
+    details: cleanedDetails,
+  }
+}
+
+function splitParagraphs(text) {
+  return (text || '')
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+}
+
+function AnswerContent({ text }) {
+  const parsed = parseAssistantAnswer(text)
+
+  if (!parsed) {
+    return (
+      <div className="message-copy">
+        {splitParagraphs(text).map((paragraph, index) => (
+          <p key={`paragraph-${index}`}>{paragraph}</p>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="assistant-answer">
+      {parsed.summary ? (
+        <div className="answer-summary">
+          {splitParagraphs(parsed.summary).map((paragraph, index) => (
+            <p key={`summary-${index}`}>{paragraph}</p>
+          ))}
+        </div>
+      ) : null}
+
+      {parsed.introMeta.from || parsed.introMeta.date || parsed.introMeta.subject || parsed.introMeta.summary || parsed.introMeta.attachment ? (
+        <div className="answer-card">
+          <div className="answer-card-header">
+            <strong>Best Match</strong>
+          </div>
+          {parsed.introMeta.subject ? <h3>{parsed.introMeta.subject}</h3> : null}
+          <div className="answer-meta">
+            {parsed.introMeta.from ? <span>{parsed.introMeta.from}</span> : null}
+            {parsed.introMeta.date ? <span>{parsed.introMeta.date}</span> : null}
+          </div>
+          {parsed.introMeta.summary ? <p>{parsed.introMeta.summary}</p> : null}
+          {parsed.introMeta.attachment ? (
+            <p className="answer-attachment">Attachment: {parsed.introMeta.attachment}</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {parsed.details.length ? (
+        <div className="answer-detail-list">
+          {parsed.details.map((detail, index) => (
+            <article key={`${detail.title}-${index}`} className="answer-card">
+              <div className="answer-card-header">
+                <strong>{detail.title || `Email ${index + 1}`}</strong>
+              </div>
+              {detail.subject ? <h3>{detail.subject}</h3> : null}
+              <div className="answer-meta">
+                {detail.from ? <span>{detail.from}</span> : null}
+                {detail.date ? <span>{detail.date}</span> : null}
+              </div>
+              {detail.summary ? <p>{detail.summary}</p> : null}
+              {detail.attachment ? (
+                <p className="answer-attachment">Attachment: {detail.attachment}</p>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function App() {
   const [health, setHealth] = useState(null)
   const [chatInput, setChatInput] = useState('')
+  const [categoryFilters, setCategoryFilters] = useState([])
+  const [senderFilter, setSenderFilter] = useState('')
+  const [subjectFilter, setSubjectFilter] = useState('')
+  const [dateFromFilter, setDateFromFilter] = useState('')
+  const [dateToFilter, setDateToFilter] = useState('')
   const [chatHistory, setChatHistory] = useState([])
   const [syncing, setSyncing] = useState(false)
   const [chatting, setChatting] = useState(false)
@@ -24,6 +212,7 @@ function App() {
     indexed_count: 0,
     last_completed_at: null,
   })
+  const [syncStatusLoaded, setSyncStatusLoaded] = useState(false)
 
   const isSyncRunning = syncing || syncStatus.state === 'running'
   const recentQuestions = chatHistory
@@ -58,7 +247,10 @@ function App() {
 
   useEffect(() => {
     loadHealth().catch(() => {})
-    api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
+    api.get('/api/sync-status')
+      .then((response) => setSyncStatus(response.data))
+      .catch(() => {})
+      .finally(() => setSyncStatusLoaded(true))
   }, [])
 
   const handleSync = async () => {
@@ -85,14 +277,19 @@ function App() {
       setStatus(response.data.message)
       const syncStatusResponse = await api.get('/api/sync-status')
       setSyncStatus(syncStatusResponse.data)
+      setSyncStatusLoaded(true)
       await loadHealth()
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Sync failed.')
-      api.get('/api/sync-status').then((response) => setSyncStatus(response.data)).catch(() => {})
+      api.get('/api/sync-status')
+        .then((response) => setSyncStatus(response.data))
+        .catch(() => {})
+        .finally(() => setSyncStatusLoaded(true))
     } finally {
       api.get('/api/sync-status')
         .then((response) => setSyncStatus(response.data))
         .catch(() => {})
+        .finally(() => setSyncStatusLoaded(true))
         .finally(() => setSyncing(false))
     }
   }
@@ -109,7 +306,17 @@ function App() {
     setError('')
 
     try {
-      const response = await api.post('/api/chat', { question, top_k: 4 })
+      const response = await api.post('/api/chat', {
+        question,
+        top_k: 4,
+        category_filters: categoryFilters,
+        search_filters: {
+          sender: senderFilter,
+          subject: subjectFilter,
+          date_from: dateFromFilter || null,
+          date_to: dateToFilter || null,
+        },
+      })
       setChatHistory((current) => [
         ...current,
         {
@@ -127,7 +334,30 @@ function App() {
     }
   }
 
+  const toggleCategoryFilter = (categoryId) => {
+    setCategoryFilters((current) => (
+      current.includes(categoryId)
+        ? current.filter((value) => value !== categoryId)
+        : [...current, categoryId]
+    ))
+  }
+
+  const clearCategoryFilters = () => {
+    setCategoryFilters([])
+  }
+
+  const clearStructuredFilters = () => {
+    setSenderFilter('')
+    setSubjectFilter('')
+    setDateFromFilter('')
+    setDateToFilter('')
+  }
+
   const formatLastSyncedAt = (value) => {
+    if (!syncStatusLoaded) {
+      return 'Last sync: loading...'
+    }
+
     if (!value) {
       return 'Last sync: not yet run'
     }
@@ -169,6 +399,75 @@ function App() {
             <span className="panel-badge">chat</span>
           </div>
 
+          <div className="chat-controls">
+            <div className="filter-toolbar">
+              <div className="filter-toolbar-copy">
+                <p className="section-kicker">Mailbox Tabs</p>
+                <p className="filter-toolbar-note">
+                  {categoryFilters.length
+                    ? `Searching ${categoryFilters.length} selected tab${categoryFilters.length > 1 ? 's' : ''}.`
+                    : 'Searching across all Gmail tabs.'}
+                </p>
+              </div>
+              <div className="filter-pill-row">
+                {CATEGORY_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`filter-pill ${categoryFilters.includes(option.id) ? 'active' : ''}`}
+                    onClick={() => toggleCategoryFilter(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="filter-pill filter-pill-clear"
+                  onClick={clearCategoryFilters}
+                  disabled={!categoryFilters.length}
+                >
+                  All tabs
+                </button>
+              </div>
+            </div>
+            <div className="structured-filter-grid">
+              <label className="structured-filter-field">
+                <span>Sender</span>
+                <input
+                  type="text"
+                  value={senderFilter}
+                  onChange={(event) => setSenderFilter(event.target.value)}
+                  placeholder="Seunghoon Baik or OpenAI"
+                />
+              </label>
+              <label className="structured-filter-field">
+                <span>Subject</span>
+                <input
+                  type="text"
+                  value={subjectFilter}
+                  onChange={(event) => setSubjectFilter(event.target.value)}
+                  placeholder="Baltimore, invoice, interview"
+                />
+              </label>
+              <label className="structured-filter-field">
+                <span>Date From</span>
+                <input
+                  type="date"
+                  value={dateFromFilter}
+                  onChange={(event) => setDateFromFilter(event.target.value)}
+                />
+              </label>
+              <label className="structured-filter-field">
+                <span>Date To</span>
+                <input
+                  type="date"
+                  value={dateToFilter}
+                  onChange={(event) => setDateToFilter(event.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+
           <div className="chat-box">
             {chatHistory.length === 0 ? (
               <div className="empty-state">
@@ -181,7 +480,15 @@ function App() {
                   className={`message-bubble ${message.role}`}
                 >
                   <p className="message-role">{message.role}</p>
-                  <p>{message.text}</p>
+                  {message.role === 'assistant' ? (
+                    <AnswerContent text={message.text} />
+                  ) : (
+                    <div className="message-copy">
+                      {splitParagraphs(message.text).map((paragraph, paragraphIndex) => (
+                        <p key={`user-paragraph-${paragraphIndex}`}>{paragraph}</p>
+                      ))}
+                    </div>
+                  )}
                   {message.sources?.length ? (
                     <div className="source-list">
                       <p className="sources-label">Sources</p>
@@ -191,6 +498,9 @@ function App() {
                           className="source-card"
                         >
                           <strong>{source.subject}</strong>
+                          {source.gmail_category ? (
+                            <span className="source-category">{source.gmail_category}</span>
+                          ) : null}
                           <span>{source.sender || 'Unknown sender'}</span>
                         </div>
                       ))}
@@ -223,16 +533,21 @@ function App() {
             />
             <div className="composer-row">
               <p className="composer-hint">
-                Answers are grounded in indexed Gmail messages, not generic chat memory.
+                Use Sender, Subject, and Date filters for exact matches. Natural language now acts as the instruction layer.
               </p>
-              <button type="button" onClick={handleAsk} disabled={chatting}>
-                {chatting ? (
-                  <>
-                    <span className="button-spinner" aria-hidden="true" />
-                    Thinking
-                  </>
-                ) : 'Ask inbox'}
-              </button>
+              <div className="composer-actions">
+                <button type="button" className="secondary-button" onClick={clearStructuredFilters}>
+                  Clear filters
+                </button>
+                <button type="button" onClick={handleAsk} disabled={chatting}>
+                  {chatting ? (
+                    <>
+                      <span className="button-spinner" aria-hidden="true" />
+                      Thinking
+                    </>
+                  ) : 'Ask inbox'}
+                </button>
+              </div>
             </div>
           </div>
         </article>

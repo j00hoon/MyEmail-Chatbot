@@ -96,6 +96,19 @@ Long term direction:
 - LangChain retrieval is wired into the live chat path for general questions when enabled
 - General-question runtime path now uses precomputed embeddings with FAISS instead of re-embedding each chunk at runtime
 - LangChain packages were installed into the backend virtual environment and wired through config flags
+- Gmail category metadata is now persisted per email via `gmail_category`
+- Existing synced emails can backfill category values from stored Gmail `labelIds`
+- Cross-category hinting added when the selected tab has no match but other tabs do
+- Sender parsing improved for phrases like `from <name> regarding ...` and `from <name> within a week`
+- Sender lookup now supports window-aware multi-email retrieval for prompts like `emails from X within a week`
+- SQLite FTS5 search replaced the old Python full-scan keyword search path
+- Vector storage migrated from local JSON file persistence to SQLite table storage with legacy JSON import
+- Structured search filters are now first-class chat inputs:
+  - sender
+  - subject
+  - date range
+  - tab/category
+- Structured filters now bypass unnecessary vector search and can directly select matching source emails
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -165,18 +178,33 @@ Long term direction:
 - 일반 질문은 옵션 활성화 시 LangChain retrieval이 실제 chat 경로에 연결됨
 - 일반 질문 runtime 경로는 chunk를 다시 임베딩하지 않고 precomputed embedding + FAISS를 사용
 - LangChain 관련 패키지를 backend 가상환경에 설치하고 config 플래그로 연결함
+- 각 이메일에 Gmail category 메타데이터를 `gmail_category`로 저장하도록 변경
+- 기존 sync 데이터도 저장된 Gmail `labelIds`를 읽어 category를 백필할 수 있도록 구성
+- 선택한 탭에 결과가 없지만 다른 탭에 있으면 cross-category hint를 주도록 개선
+- `from <name> regarding ...`, `from <name> within a week` 같은 문구에서 sender 파싱 정확도 개선
+- `emails from X within a week` 스타일 질문에 대해 기간 조건을 반영한 multi-email sender lookup 지원
+- Python 전체 스캔 기반 keyword search를 SQLite FTS5 검색으로 교체
+- 로컬 JSON 파일 vector store를 SQLite 테이블 기반 저장으로 마이그레이션
+- 구조화된 검색 필터를 chat 입력의 1급 요소로 추가:
+  - sender
+  - subject
+  - date range
+  - tab/category
+- 구조 필터가 있는 경우 불필요한 vector search를 건너뛰고 직접 source email을 선택하도록 개선
 
 ### Storage
 
 - Metadata is stored in local SQLite
-- Vector data is stored in local JSON vector store
+- Vector data is stored in SQLite table storage
 - Redis is used as an optional chat response cache layer
 - No external DB server is currently required
+- SQLite FTS5 is now used for local full-text email retrieval
 
 - 메타데이터는 로컬 SQLite에 저장됨
-- 벡터 데이터는 로컬 JSON vector store에 저장됨
+- 벡터 데이터는 SQLite 테이블에 저장됨
 - Redis는 선택적으로 사용할 수 있는 chat response cache 계층으로 추가됨
 - 현재는 외부 DB 서버 설치가 필요 없음
+- 로컬 full-text email retrieval에는 SQLite FTS5를 사용함
 
 ### Frontend
 
@@ -193,6 +221,23 @@ Long term direction:
 - Mailbox card action layout updated so the sync button sits directly under `MAILBOX`
 - Ask Inbox waiting state now shows a visible spinner in the button and a live assistant thinking bubble in the chat area
 - Vite frontend proxy fixed to target backend port `8000`
+- Assistant answer rendering now supports inline `Answer: ...` / `From: ...` field formatting for cleaner cards
+- Mailbox tab filters added in chat UI:
+  - Primary
+  - Promotions
+  - Social
+  - Updates
+- Structured search filters added to the chat UI:
+  - Sender
+  - Subject
+  - Date From
+  - Date To
+- Main chat card order updated to:
+  - filters
+  - chat history
+  - question input
+- Extra spacing added between filter controls and chat history for readability
+- Initial last-sync label now shows loading state instead of briefly flashing `not yet run`
 
 - React UI를 단순 이메일 리스트 뷰어에서 Gmail AI 워크스페이스 형태로 업그레이드함
 - 보라색 중심 테마 적용
@@ -207,6 +252,23 @@ Long term direction:
 - Mailbox 카드에서 sync 버튼을 `MAILBOX` 바로 아래로 재배치
 - Ask Inbox 대기 상태에서 버튼 spinner와 채팅창 assistant thinking bubble이 보이도록 UI 강화
 - Vite 프록시가 backend `8000` 포트를 바라보도록 수정
+- assistant 답변 렌더링이 `Answer: ...` / `From: ...` 같은 inline field 형식도 파싱해서 카드형으로 보여주도록 개선
+- 채팅 UI에 Mailbox tab 필터 추가:
+  - Primary
+  - Promotions
+  - Social
+  - Updates
+- 채팅 UI에 구조화 검색 필터 추가:
+  - Sender
+  - Subject
+  - Date From
+  - Date To
+- 메인 chat 카드의 순서를 다음과 같이 재배치:
+  - 필터
+  - 대화 내역
+  - 질문 입력
+- 필터 영역과 대화 내역 사이 간격을 늘려 가독성 개선
+- 초기 last sync 라벨이 잠깐 `not yet run`으로 보이던 문제를 loading state로 수정
 
 ### Search Quality Improvements
 
@@ -235,6 +297,10 @@ Long term direction:
 - Added config-driven fallback so deterministic retrieval remains active for sender/date/latest questions
 - Added deterministic recent-email-list retrieval for latest multi-email summary requests
 - Fixed a parser bug where phrases like `from the latest 10 emails` could be misread as a sender filter
+- Added Gmail-category-aware retrieval filtering and source display
+- Added structured filter-aware retrieval so exact sender/subject/date searches no longer depend only on natural-language parsing
+- Replaced Python mailbox scans with FTS5-backed keyword retrieval for much faster exact-match searches
+- Added SQLite-backed vector persistence to remove JSON-file scanning bottlenecks
 
 - 이메일 1개를 통째로 인덱싱하던 방식 대신 chunking 추가
 - 하이브리드 검색 추가:
@@ -261,6 +327,10 @@ Long term direction:
 - sender/date/latest 질문은 deterministic retrieval을 유지하고 일반 질문만 LangChain 경로를 타도록 config-driven fallback 추가
 - latest 다중 이메일 요약 요청을 위한 deterministic recent-email-list retrieval 추가
 - `from the latest 10 emails` 같은 문구가 sender filter로 잘못 해석되던 파서 버그 수정
+- Gmail category 기반 retrieval filtering과 source 표시 추가
+- sender/subject/date 구조 필터를 retrieval에 직접 반영하여 자연어 파싱 실패 의존도를 낮춤
+- Python mailbox scan 대신 FTS5 기반 keyword retrieval로 exact-match 검색 속도 개선
+- JSON 파일 병목을 줄이기 위해 SQLite 기반 vector persistence 추가
 
 ## Current Architecture | 현재 아키텍처
 
@@ -270,7 +340,8 @@ Long term direction:
 [Ingestion Agent]
     ↓
 [SQLite Metadata Store]
-[Local JSON Vector Store]
+[SQLite FTS5 Search]
+[SQLite Vector Store]
  [Redis Chat Cache]
  [Sync Progress Store]
     ↓
@@ -315,6 +386,9 @@ Long term direction:
 - LangChain retrieval packages are installed in the backend virtual environment
 - Optional LangChain runtime retrieval can be enabled through local `.env`
 - `LANGCHAIN_RETRIEVAL_ENABLED=true` is now used in local runtime for general-question retrieval
+- Local search now uses SQLite FTS5 instead of Python mailbox scanning
+- Local vector persistence now uses SQLite `email_vectors`
+- Structured search filters are live in the chat UI and backend request contract
 
 - 백엔드는 로컬 `http://127.0.0.1:8000` 에서 실행됨
 - 프론트엔드는 로컬 `http://127.0.0.1:5173` 에서 실행됨
@@ -324,6 +398,9 @@ Long term direction:
 - LangChain retrieval 패키지가 backend 가상환경에 설치됨
 - optional LangChain runtime retrieval은 로컬 `.env` 플래그로 활성화 가능
 - 로컬 실행에서는 `LANGCHAIN_RETRIEVAL_ENABLED=true`로 일반 질문 retrieval에 적용 중
+- 로컬 검색은 이제 Python mailbox scan 대신 SQLite FTS5를 사용함
+- 로컬 vector persistence는 이제 SQLite `email_vectors` 테이블을 사용함
+- 구조화 검색 필터가 chat UI와 backend request contract에 실제 연결됨
 
 ## What Is Not Done Yet | 아직 안 된 것
 
@@ -339,12 +416,12 @@ Long term direction:
 
 - Search accuracy improved, but it can still pull partially related emails
 - Some messages may still contain noisy newsletter/email-markup remnants
-- Current vector store is okay for MVP but not ideal for large mailbox scale
-- SQLite + JSON store is fine for local demo, but not ideal for full production scale
+- Current vector search still computes cosine similarity in Python after loading SQLite-backed vectors into memory
+- SQLite is now good enough for local demo search, but vector retrieval would still benefit from a dedicated ANN/vector index later
 - Redis cache is versioned by mailbox and invalidated after sync/index refresh
 - Sync progress UI currently uses polling against `/api/sync-status`
 - `latest` / sender-specific question handling is improved, but still partly heuristic
-- Vector store file is large enough that local JSON search remains a performance bottleneck
+- JSON vector-store bottleneck is removed, but SQLite-backed vectors still load into memory and use Python cosine scoring
 - Source cards still show retrieval evidence separately from the main answer, which may need further UX tuning
 - LangChain runtime path is only partially active:
   - general questions use LangChain retrieval
@@ -357,12 +434,12 @@ Long term direction:
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
-- 현재 vector store는 MVP용으로는 괜찮지만 대용량 메일박스에는 적합하지 않음
-- SQLite + JSON 구조는 로컬 데모용으로는 괜찮지만 본격 운영용으로는 한계가 있음
+- 현재 vector search는 SQLite에 저장된 벡터를 메모리로 올린 뒤 Python cosine scoring을 수행하므로 추가 최적화 여지가 있음
+- 현재 SQLite 구조는 로컬 데모 검색에는 충분하지만, vector retrieval은 이후 전용 ANN/vector index로 더 좋아질 수 있음
 - Redis cache는 mailbox version 기준으로 관리되며 sync/index refresh 후 무효화됨
 - Sync progress UI는 현재 `/api/sync-status` polling 방식으로 동작함
 - `latest` / sender 중심 질문 처리는 좋아졌지만 아직 일부 heuristic 기반임
-- vector store 파일이 커져서 로컬 JSON 검색 성능이 계속 병목이 될 수 있음
+- JSON vector store 병목은 제거됐지만, SQLite 기반 벡터도 현재는 메모리 로드 + Python cosine scoring 구조라 추가 개선 여지가 있음
 - source 카드는 본문 답변과 별도로 표시되며 UX 측면에서 추가 조정 여지가 있음
 - LangChain runtime 경로는 현재 부분 적용 상태:
   - 일반 질문은 LangChain retrieval 사용
@@ -386,7 +463,7 @@ Long term direction:
 
 ### Priority 2
 
-- Upgrade storage from local JSON vector store to PostgreSQL + pgvector or Qdrant
+- Upgrade SQLite-backed vector search to a dedicated ANN/vector index such as pgvector, Qdrant, or sqlite-vec
 - Fully productionize LangChain retrieval routing:
   - SelfQueryRetriever on a metadata-filter-friendly vector store
   - Cohere rerank evaluation
@@ -396,6 +473,10 @@ Long term direction:
   - recency boosting
   - exact subject match
   - attachment and thread-aware ranking
+- Expand structured search UX:
+  - quick presets for last 7 days / last 30 days
+  - optional attachment-only filter
+  - visible active-filter chips above results
 
 - 로컬 JSON vector store를 PostgreSQL + pgvector 또는 Qdrant로 업그레이드
 - LangChain retrieval routing을 production 수준으로 마무리:
@@ -422,9 +503,9 @@ Long term direction:
 
 ### Short Term
 
-Build a strong local-first Gmail AI search assistant for portfolio demos.
+Build a strong local-first Gmail AI search assistant for portfolio demos with reliable structured search.
 
-포트폴리오 데모용으로 완성도 높은 local-first Gmail AI 검색 도구를 먼저 만든다.
+포트폴리오 데모용으로 구조화 검색까지 안정적인 local-first Gmail AI 검색 도구를 먼저 만든다.
 
 ### Mid Term
 
@@ -446,14 +527,14 @@ When resuming, a good prompt would be:
 
 ```text
 Read PROJECT_STATUS.md and continue from the current architecture.
-Next, harden the Gmail sync flow for large mailboxes and improve sync UI visibility.
+Next, harden the Gmail sync flow for large mailboxes and improve structured search UX plus retrieval ranking.
 ```
 
 또는:
 
 ```text
 PROJECT_STATUS.md 읽고 이어서 해줘.
-다음 단계로 Gmail sync 안정화와 sync UI 개선 작업을 진행하자.
+다음 단계로 Gmail sync 안정화와 structured search UX / retrieval ranking 개선 작업을 진행하자.
 ```
 
 ## Security Note | 보안 메모

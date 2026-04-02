@@ -30,14 +30,24 @@ class EmailRecordResponse(BaseModel):
     sender: str | None = None
     recipients: str | None = None
     sent_at: str | None = None
+    gmail_category: str | None = None
     snippet: str | None = None
     body_text: str | None = None
     attachment_names: list[str] = Field(default_factory=list)
 
 
+class SearchFilters(BaseModel):
+    sender: str = ""
+    subject: str = ""
+    date_from: str | None = None
+    date_to: str | None = None
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int = Field(default=4, ge=1, le=10)
+    category_filters: list[str] = Field(default_factory=list)
+    search_filters: SearchFilters = Field(default_factory=SearchFilters)
 
 
 class SourceReference(BaseModel):
@@ -45,6 +55,7 @@ class SourceReference(BaseModel):
     subject: str
     sender: str | None = None
     sent_at: str | None = None
+    gmail_category: str | None = None
     snippet: str | None = None
     attachment_names: list[str] = Field(default_factory=list)
     score: float

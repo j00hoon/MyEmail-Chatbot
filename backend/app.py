@@ -24,7 +24,10 @@ from tools.vector_store import VectorStore
 
 
 metadata_store = MetadataStore(settings.database_url)
-vector_store = VectorStore(settings.vector_store_path)
+vector_store = VectorStore(
+    database_url=settings.database_url,
+    legacy_path=settings.vector_store_path,
+)
 sync_progress_store = SyncProgressStore()
 cache_store = CacheStore(
     redis_url=settings.redis_url,
@@ -176,7 +179,12 @@ def list_emails(limit: int = Query(default=20, ge=1, le=50)):
 @app.post("/api/chat", response_model=ChatResponse)
 def chat_with_mailbox(payload: ChatRequest):
     try:
-        result = chat_agent.run(question=payload.question, top_k=payload.top_k)
+        result = chat_agent.run(
+            question=payload.question,
+            top_k=payload.top_k,
+            category_filters=payload.category_filters,
+            search_filters=payload.search_filters.model_dump(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

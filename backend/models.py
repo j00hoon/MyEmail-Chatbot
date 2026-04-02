@@ -14,6 +14,7 @@ class EmailRecord(Base):
     sender = Column(Text, nullable=True)
     recipients = Column(Text, nullable=True)
     sent_at = Column(Text, nullable=True)
+    gmail_category = Column(Text, nullable=True, index=True)
     snippet = Column(Text, nullable=True)
     body_text = Column(Text, nullable=True)
     attachment_names = Column(Text, nullable=True)
