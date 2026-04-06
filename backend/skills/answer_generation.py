@@ -9,7 +9,14 @@ class AnswerGenerationSkill:
     multi_email_source_chars = 550
     multi_email_total_context_chars = 16000
 
-    def execute(self, question: str, sources: list[dict], answer_mode: str = "single_email"):
+    def execute(
+        self,
+        question: str,
+        sources: list[dict],
+        answer_mode: str = "single_email",
+        output_mode: str = "concise_summary",
+        gmail_query: str = "",
+    ):
         if not sources:
             return "I could not find any indexed emails that look relevant yet. Try syncing Gmail first."
 
@@ -32,6 +39,7 @@ class AnswerGenerationSkill:
                 if answer_mode == "multi_email"
                 else self.max_total_context_chars
             )
+
             for index, source in enumerate(sources, start=1):
                 content_source = (
                     source["snippet"]
@@ -55,7 +63,13 @@ class AnswerGenerationSkill:
                 total_context_chars += len(block)
 
             joined_context = "\n\n".join(context_blocks)
-            prompt = self._prompt_for_mode(question=question, joined_context=joined_context, answer_mode=answer_mode)
+            prompt = self._prompt_for_mode(
+                question=question,
+                joined_context=joined_context,
+                answer_mode=answer_mode,
+                output_mode=output_mode,
+                gmail_query=gmail_query,
+            )
             response = client.responses.create(
                 model=settings.openai_chat_model,
                 input=prompt,
@@ -76,7 +90,14 @@ class AnswerGenerationSkill:
         ]
         return "\n".join(summary_lines)
 
-    def _prompt_for_mode(self, question: str, joined_context: str, answer_mode: str):
+    def _prompt_for_mode(self, question: str, joined_context: str, answer_mode: str, output_mode: str, gmail_query: str):
+        response_style = {
+            "concise_summary": "Give a concise prose summary.",
+            "bullet_points": "Prefer brief bullet-like summaries inside the required structure.",
+            "table": "Keep each email block compact and table-friendly.",
+            "raw_list": "Use a plain list style inside the required structure.",
+        }.get(output_mode, "Give a concise prose summary.")
+
         if answer_mode == "multi_email":
             return (
                 "You are a personal Gmail assistant. Answer only from the provided email context. "
@@ -91,7 +112,9 @@ class AnswerGenerationSkill:
                 "- Each email block must keep the exact labels shown above.\n"
                 "- 'Attachment' must say either 'None' or list attachment names.\n"
                 "- If multiple sources are provided, use them all in order unless you truly received fewer sources.\n"
+                f"- Response style: {response_style}\n"
                 "- Do not add bullets or commentary outside this structure.\n\n"
+                f"Structured Gmail Query:\n{gmail_query or 'N/A'}\n\n"
                 f"Question:\n{question}\n\n"
                 f"Email Context:\n\n{joined_context}"
             )
@@ -104,9 +127,11 @@ class AnswerGenerationSkill:
             "- 'Answer' must be a direct 1-2 sentence answer to the user's question.\n"
             "- 'From', 'Date', and 'Subject' must come from the selected email.\n"
             "- 'Summary' must be a short plain-English summary of that selected email.\n"
-            "- 'Attachment' must say either 'None' or list the attachment names.\n"
+            "- 'Attachment' must say either 'None' or list attachment names.\n"
             "- If the answer is uncertain, say so clearly in 'Answer'.\n"
+            f"- Response style: {response_style}\n"
             "- Do not add extra headings, bullets, or commentary outside those six labels.\n\n"
+            f"Structured Gmail Query:\n{gmail_query or 'N/A'}\n\n"
             f"Question:\n{question}\n\n"
             f"Email Context:\n\n{joined_context}"
         )
@@ -131,14 +156,11 @@ class AnswerGenerationSkill:
 
     def _is_sender_list_request(self, question: str):
         lowered = question.lower()
-        return (
-            ("sender" in lowered or "who sent" in lowered or "from whom" in lowered)
-            and any(term in lowered for term in ("latest", "recent", "newest", "last"))
-        )
+        return "sender" in lowered or "who sent" in lowered or "from whom" in lowered
 
     def _format_sender_list_answer(self, question: str, sources: list[dict]):
         lines = [
-            f"Answer: Here are the sender names for the latest {len(sources)} emails that matched your filter.",
+            f"Answer: Here are the sender names for the {len(sources)} emails that matched your filter.",
         ]
         for index, source in enumerate(sources, start=1):
             attachment_text = ", ".join(source["attachment_names"]) or "None"

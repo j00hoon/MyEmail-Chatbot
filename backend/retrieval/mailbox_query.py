@@ -1,203 +1,267 @@
-import re
+from __future__ import annotations
+
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from datetime import date, datetime, timedelta, timezone
+import logging
+from pathlib import Path
+
+from config import settings
+from schemas import EmailSearchFilters, EmailSearchIntent, DateRange
 
 
-SENDER_DELIMITER_PATTERN = re.compile(
-    r"\b(?:regarding|about|re\b|subject\b|with\b|within\b|whose\b|that\b|which\b|during\b|over\b|for\b|and\s+(?:give|show|tell|summarize|read)\b)\b"
-)
+def _utc_today():
+    return datetime.now(timezone.utc).date()
+
+
+DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / "data" / "query_debug.log"
+DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+_debug_logger = logging.getLogger("query_debug")
+if not _debug_logger.handlers:
+    handler = logging.FileHandler(DEBUG_LOG_PATH, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _debug_logger.addHandler(handler)
+    _debug_logger.setLevel(logging.INFO)
+    _debug_logger.propagate = False
+
+
+def _build_default_intent(question: str):
+    cleaned_question = " ".join(question.strip().split())
+    fallback_keyword = cleaned_question[:120] if cleaned_question else "email search"
+    return EmailSearchIntent(
+        intent="SEARCH_EMAILS",
+        search_filters=EmailSearchFilters(
+            keywords=[fallback_keyword],
+            semantic_expansions=[],
+            sender=None,
+            is_important=False,
+        ),
+        date_range=DateRange(),
+        output_mode="bullet_points",
+    )
 
 
 @dataclass
-class QueryAnalysis:
-    normalized_question: str
-    sender_query: str = ""
-    requested_count: int = 1
-    window_days: int | None = None
-    references_emails: bool = False
-    wants_latest: bool = False
-    wants_summary: bool = False
-    wants_list: bool = False
-    wants_important: bool = False
-    asks_for_date: bool = False
-
-
-@dataclass
-class RetrievalPlan:
-    kind: str
-    normalized_question: str
-    sender_query: str = ""
-    requested_count: int = 1
-    window_days: int | None = None
-    answer_mode: str = "single_email"
+class QueryExecutionPlan:
+    question: str
+    reference_date: date
+    structured_intent: EmailSearchIntent
+    gmail_query: str
+    semantic_query_text: str
+    metadata_filters: dict[str, str | None]
+    keyword_groups: list[list[str]]
 
 
 class QueryAnalyzer:
-    def analyze(self, question: str, default_count: int = 4):
-        lowered = question.lower().strip()
-        references_emails = any(term in lowered for term in ("email", "emails", "mail", "inbox", "message", "messages"))
-        wants_latest = any(term in lowered for term in ("latest", "recent", "newest", "most recent", "last"))
-        wants_summary = any(term in lowered for term in ("summarize", "summary", "summaries"))
-        wants_list = any(term in lowered for term in ("list", "show", "give me", "select")) or wants_summary
-        wants_important = "important" in lowered
-        asks_for_date = any(phrase in lowered for phrase in ("when did", "what date", "on what date", "when was"))
+    def __init__(self):
+        self._chain = self._build_chain()
 
-        analysis = QueryAnalysis(
-            normalized_question=self._normalize_text(question),
-            sender_query=self._extract_sender_query(question),
-            requested_count=self._extract_requested_count(question) or default_count,
-            window_days=self._extract_window_days(question),
-            references_emails=references_emails,
-            wants_latest=wants_latest,
-            wants_summary=wants_summary,
-            wants_list=wants_list,
-            wants_important=wants_important,
-            asks_for_date=asks_for_date,
-        )
-        return analysis
+    def analyze(self, question: str, *, reference_date: date | None = None):
+        reference_date = reference_date or _utc_today()
 
-    def _extract_requested_count(self, question: str):
-        lowered = question.lower()
-        patterns = (
-            r"\b(?:top|select|latest|recent|newest|last)\s+(\d+)\b",
-            r"\b(\d+)\s+(?:latest|recent|newest)\b",
-            r"\b(\d+)\s+(?:emails|messages)\b",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, lowered)
-            if match:
-                return max(1, min(int(match.group(1)), 10))
-        return None
-
-    def _extract_window_days(self, question: str):
-        lowered = question.lower()
-        if any(
-            term in lowered
-            for term in (
-                "last one week",
-                "last week",
-                "past week",
-                "within a week",
-                "within one week",
-                "within the week",
-                "7 day",
-                "7-day",
+        if self._chain is None:
+            self._log_debug(
+                event="query_analyzer_fallback",
+                reason="chain_unavailable",
+                question=question,
+                reference_date=reference_date.isoformat(),
             )
-        ):
-            return 7
-        return None
+            return _build_default_intent(question)
 
-    def _extract_sender_query(self, question: str):
-        lowered = question.lower().strip()
-        match = re.search(r"\bfrom\s+(.+?)(?:\?|$)", lowered)
-        if not match:
-            return ""
-
-        candidate = match.group(1)
-        candidate = SENDER_DELIMITER_PATTERN.split(candidate, maxsplit=1)[0]
-        candidate = re.sub(r"[^a-z0-9@\.\s_-]", " ", candidate)
-        tokens = [
-            token
-            for token in candidate.split()
-            if token not in {"the", "a", "an", "latest", "recent", "newest", "last", "email", "emails"}
-        ]
-        sender_query = " ".join(tokens).strip()
-        if not sender_query:
-            return ""
-        if not re.search(r"[a-z@]", sender_query):
-            return ""
-        return sender_query
-
-    def _normalize_text(self, text: str):
-        return " ".join(re.findall(r"[a-zA-Z0-9_]+", text.lower()))
-
-
-class RetrievalPlanner:
-    def build(self, analysis: QueryAnalysis):
-        if (
-            analysis.wants_important
-            and analysis.window_days == 7
-            and analysis.requested_count > 1
-        ):
-            return RetrievalPlan(
-                kind="top_recent_important",
-                normalized_question=analysis.normalized_question,
-                requested_count=analysis.requested_count,
-                window_days=analysis.window_days,
-                answer_mode="multi_email",
-            )
-
-        if analysis.references_emails and analysis.wants_latest and analysis.requested_count > 1:
-            return RetrievalPlan(
-                kind="recent_email_list",
-                normalized_question=analysis.normalized_question,
-                requested_count=analysis.requested_count,
-                window_days=analysis.window_days,
-                answer_mode="multi_email",
-            )
-
-        if analysis.sender_query and analysis.wants_latest:
-            return RetrievalPlan(
-                kind="latest_from",
-                normalized_question=analysis.normalized_question,
-                sender_query=analysis.sender_query,
-                requested_count=analysis.requested_count,
-                window_days=analysis.window_days,
-            )
-
-        if analysis.sender_query:
-            return RetrievalPlan(
-                kind="sender_lookup",
-                normalized_question=analysis.normalized_question,
-                sender_query=analysis.sender_query,
-                requested_count=analysis.requested_count,
-                window_days=analysis.window_days,
-                answer_mode=("multi_email" if analysis.references_emails and (analysis.wants_list or analysis.wants_summary or analysis.window_days is not None or analysis.requested_count > 1) else "single_email"),
-            )
-
-        if analysis.asks_for_date:
-            return RetrievalPlan(
-                kind="date_lookup",
-                normalized_question=analysis.normalized_question,
-            )
-
-        return RetrievalPlan(
-            kind="general",
-            normalized_question=analysis.normalized_question,
-            requested_count=analysis.requested_count,
-        )
-
-
-class CandidateSelector:
-    def select_recent_emails(self, records, requested_count: int, window_days: int | None = None):
-        ranked = []
-        cutoff = None
-        if window_days is not None:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-
-        for record in records:
-            sent_at = self.parse_sent_at(record.sent_at)
-            if cutoff is not None and sent_at < cutoff:
-                continue
-            ranked.append((sent_at, record))
-
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return [record for _, record in ranked[:requested_count]]
-
-    def parse_sent_at(self, sent_at: str | None):
-        if not sent_at:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        normalized = sent_at.strip()
-        if " (" in normalized:
-            normalized = normalized.split(" (", 1)[0]
         try:
-            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = parsedate_to_datetime(sent_at)
-            except (TypeError, ValueError, IndexError):
-                return datetime.min.replace(tzinfo=timezone.utc)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed
+            result = self._chain.invoke(
+                {
+                    "question": question.strip(),
+                    "reference_date": reference_date.isoformat(),
+                }
+            )
+            self._log_debug(
+                event="query_analyzer_success",
+                question=question,
+                reference_date=reference_date.isoformat(),
+                parsed_intent=result.model_dump(mode="json"),
+            )
+            return result
+        except Exception as exc:
+            self._log_debug(
+                event="query_analyzer_fallback",
+                reason="invoke_exception",
+                question=question,
+                reference_date=reference_date.isoformat(),
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+                exception_repr=repr(exc),
+            )
+            return _build_default_intent(question)
+
+    def _build_chain(self):
+        if not settings.openai_api_key:
+            return None
+
+        try:
+            from langchain_core.prompts import ChatPromptTemplate
+            from langchain_openai import ChatOpenAI
+        except ImportError:
+            return None
+
+        llm = ChatOpenAI(
+            api_key=settings.openai_api_key,
+            model=settings.openai_chat_model,
+            temperature=0,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "\n".join(
+                        [
+                            "You are a query understanding engine for a Gmail search assistant.",
+                            "Convert the user's request into a strictly structured EmailSearchIntent object.",
+                            "Use the provided reference date to resolve all relative time expressions into absolute ISO dates.",
+                            "Return start_date and end_date in YYYY-MM-DD format when the user implies a range.",
+                            "Interpret semantic intent, not just literal words.",
+                            "For topic searches, populate keywords with the user's core topics in priority order.",
+                            "Populate semantic_expansions with a flat list of synonyms or neighboring concepts that improve retrieval.",
+                            "If the user asks about billing, likely semantic expansions include terms such as payment, invoice, receipt, premium, charge, transaction, statement, or refund when context supports them.",
+                            "Set sender only when the user is clearly asking about a specific sender or contact.",
+                            "Use intent=SUMMARIZE_THREADS when the user wants a synthesized summary over multiple related emails.",
+                            "Use intent=FIND_CONTACT when the user mainly wants a sender/contact identity.",
+                            "Use intent=UNSUBSCRIBE_ASSIST only for unsubscribe or mailing-list management requests.",
+                            "Use output_mode=bullet_points for list-like or summary-over-multiple-email requests.",
+                            "Use output_mode=table only when the user explicitly asks for a table.",
+                            "Use output_mode=raw_list when the user explicitly asks for a raw list.",
+                            "Use output_mode=concise_summary otherwise.",
+                            "Only set is_important=true when the user explicitly asks for important or urgent emails.",
+                        ]
+                    ),
+                ),
+                (
+                    "human",
+                    "\n".join(
+                        [
+                            "Reference date: {reference_date}",
+                            "User question: {question}",
+                        ]
+                    ),
+                ),
+            ]
+        )
+
+        try:
+            return prompt | llm.with_structured_output(
+                EmailSearchIntent,
+                method="function_calling",
+            )
+        except AttributeError:
+            self._log_debug(
+                event="query_analyzer_chain_init_failed",
+                reason="with_structured_output_missing",
+            )
+            return None
+
+    def _log_debug(self, **payload):
+        try:
+            _debug_logger.info(payload)
+        except Exception:
+            return
+
+
+class GmailQueryBuilder:
+    def build(self, structured_intent: EmailSearchIntent, *, category_filters: list[str] | None = None):
+        clauses: list[str] = []
+
+        sender = (structured_intent.search_filters.sender or "").strip()
+        if sender:
+            clauses.append(f"from:{self._escape_token(sender)}")
+
+        for group in structured_intent.search_filters.grouped_terms():
+            group_clause = " OR ".join(self._escape_token(term) for term in group)
+            if group_clause:
+                clauses.append(f"({group_clause})")
+
+        if structured_intent.search_filters.is_important:
+            clauses.append("is:important")
+
+        if category_filters:
+            label_clauses = [f"category:{self._escape_token(category)}" for category in category_filters]
+            clauses.append("(" + " OR ".join(label_clauses) + ")")
+
+        start_date = structured_intent.date_range.start_date
+        end_date = structured_intent.date_range.end_date
+        if start_date is not None:
+            clauses.append(f"after:{start_date.strftime('%Y/%m/%d')}")
+        if end_date is not None:
+            day_after = end_date + timedelta(days=1)
+            clauses.append(f"before:{day_after.strftime('%Y/%m/%d')}")
+
+        return " ".join(clause for clause in clauses if clause).strip()
+
+    def _escape_token(self, value: str):
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            return '""'
+        if " " in cleaned or ":" in cleaned:
+            escaped = cleaned.replace('"', '\\"')
+            return f'"{escaped}"'
+        return cleaned
+
+
+class QueryExecutionPlanner:
+    def __init__(self, gmail_query_builder: GmailQueryBuilder | None = None):
+        self.gmail_query_builder = gmail_query_builder or GmailQueryBuilder()
+
+    def build(
+        self,
+        *,
+        question: str,
+        structured_intent: EmailSearchIntent,
+        reference_date: date | None = None,
+        category_filters: list[str] | None = None,
+        search_filters: dict | None = None,
+    ):
+        merged_sender = (search_filters or {}).get("sender") or structured_intent.search_filters.sender
+        date_from = (search_filters or {}).get("date_from") or self._date_to_string(structured_intent.date_range.start_date)
+        date_to = (search_filters or {}).get("date_to") or self._date_to_string(structured_intent.date_range.end_date)
+
+        keyword_groups = structured_intent.search_filters.grouped_terms()
+        semantic_query_text = self._build_semantic_query_text(question=question, structured_intent=structured_intent)
+
+        return QueryExecutionPlan(
+            question=question,
+            reference_date=reference_date or _utc_today(),
+            structured_intent=structured_intent,
+            gmail_query=self.gmail_query_builder.build(structured_intent, category_filters=category_filters),
+            semantic_query_text=semantic_query_text,
+            metadata_filters={
+                "sender": merged_sender,
+                "subject": (search_filters or {}).get("subject") or None,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+            keyword_groups=keyword_groups,
+        )
+
+    def _build_semantic_query_text(self, *, question: str, structured_intent: EmailSearchIntent):
+        parts = [question.strip()]
+
+        ordered_terms = structured_intent.search_filters.ordered_terms()
+        if ordered_terms:
+            parts.append("Priority search concepts: " + ", ".join(ordered_terms))
+
+        sender = (structured_intent.search_filters.sender or "").strip()
+        if sender:
+            parts.append(f"Sender focus: {sender}")
+
+        if structured_intent.search_filters.is_important:
+            parts.append("Importance focus: important or urgent messages")
+
+        if structured_intent.date_range.start_date or structured_intent.date_range.end_date:
+            start_date = self._date_to_string(structured_intent.date_range.start_date) or "open"
+            end_date = self._date_to_string(structured_intent.date_range.end_date) or "open"
+            parts.append(f"Date range: {start_date} to {end_date}")
+
+        return "\n".join(part for part in parts if part).strip()
+
+    def _date_to_string(self, value: date | None):
+        return value.isoformat() if value is not None else None

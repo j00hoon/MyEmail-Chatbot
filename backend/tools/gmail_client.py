@@ -266,7 +266,8 @@ class GmailClient:
 
     def _extract_parts(self, payload: dict[str, Any]):
         attachment_names: list[str] = []
-        body_segments: list[str] = []
+        plain_segments: list[str] = []
+        html_segments: list[str] = []
 
         def walk(part: dict[str, Any]):
             filename = part.get("filename")
@@ -280,7 +281,10 @@ class GmailClient:
                 try:
                     decoded = base64.urlsafe_b64decode(data.encode("utf-8"))
                     text = decoded.decode("utf-8", errors="ignore")
-                    body_segments.append(text)
+                    if mime_type == "text/plain":
+                        plain_segments.append(text)
+                    else:
+                        html_segments.append(text)
                 except Exception:
                     pass
 
@@ -288,7 +292,8 @@ class GmailClient:
                 walk(child)
 
         walk(payload)
-        body_text = "\n".join(segment.strip() for segment in body_segments if segment.strip())
+        preferred_segments = plain_segments if plain_segments else html_segments
+        body_text = "\n".join(segment.strip() for segment in preferred_segments if segment.strip())
         return body_text, attachment_names
 
     def _map_gmail_category(self, label_ids: list[str] | None):

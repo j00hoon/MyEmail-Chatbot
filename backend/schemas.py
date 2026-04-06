@@ -1,3 +1,6 @@
+from datetime import date
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -41,6 +44,57 @@ class SearchFilters(BaseModel):
     subject: str = ""
     date_from: str | None = None
     date_to: str | None = None
+
+
+class EmailSearchFilters(BaseModel):
+    keywords: list[str] = Field(default_factory=list)
+    semantic_expansions: list[str] = Field(default_factory=list)
+    sender: str | None = None
+    is_important: bool = False
+
+    def ordered_terms(self):
+        terms: list[str] = []
+        seen: set[str] = set()
+
+        for keyword in self.keywords:
+            normalized = keyword.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                terms.append(normalized)
+
+        for synonym in self.semantic_expansions:
+            normalized_synonym = synonym.strip()
+            if normalized_synonym and normalized_synonym not in seen:
+                seen.add(normalized_synonym)
+                terms.append(normalized_synonym)
+
+        return terms
+
+    def grouped_terms(self):
+        terms = self.ordered_terms()
+        return [terms] if terms else []
+
+
+class DateRange(BaseModel):
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+class EmailSearchIntent(BaseModel):
+    intent: Literal[
+        "SEARCH_EMAILS",
+        "SUMMARIZE_THREADS",
+        "FIND_CONTACT",
+        "UNSUBSCRIBE_ASSIST",
+    ] = "SEARCH_EMAILS"
+    search_filters: EmailSearchFilters = Field(default_factory=EmailSearchFilters)
+    date_range: DateRange = Field(default_factory=DateRange)
+    output_mode: Literal[
+        "concise_summary",
+        "bullet_points",
+        "table",
+        "raw_list",
+    ] = "concise_summary"
 
 
 class ChatRequest(BaseModel):
