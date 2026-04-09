@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import logging
 from pathlib import Path
 
 from config import settings
+from retrieval.execution_plans import QueryExecutionPlan
 from schemas import EmailSearchFilters, EmailSearchIntent, DateRange
 
 
@@ -34,22 +34,16 @@ def _build_default_intent(question: str):
             keywords=[fallback_keyword],
             semantic_expansions=[],
             sender=None,
+            subject=None,
             is_important=False,
         ),
         date_range=DateRange(),
+        result_scope="top_n",
+        aggregation_mode="emails",
+        retrieval_mode_hint="hybrid",
+        requested_count=None,
         output_mode="bullet_points",
     )
-
-
-@dataclass
-class QueryExecutionPlan:
-    question: str
-    reference_date: date
-    structured_intent: EmailSearchIntent
-    gmail_query: str
-    semantic_query_text: str
-    metadata_filters: dict[str, str | None]
-    keyword_groups: list[list[str]]
 
 
 class QueryAnalyzer:
@@ -128,6 +122,15 @@ class QueryAnalyzer:
                             "Use intent=SUMMARIZE_THREADS when the user wants a synthesized summary over multiple related emails.",
                             "Use intent=FIND_CONTACT when the user mainly wants a sender/contact identity.",
                             "Use intent=UNSUBSCRIBE_ASSIST only for unsubscribe or mailing-list management requests.",
+                            "Set result_scope=all when the user asks for all matching emails.",
+                            "Set result_scope=best_match when the user clearly wants the single most relevant email.",
+                            "Set result_scope=top_n when the user asks for a subset, recent highlights, or a bounded summary.",
+                            "Set requested_count only when the user explicitly or implicitly asks for a number of results.",
+                            "Use aggregation_mode=threads when the user asks for thread-level summaries.",
+                            "Use aggregation_mode=senders when the user wants a contact or sender list.",
+                            "Use retrieval_mode_hint=exact for filter-heavy requests driven by sender, date, subject, or explicit mailbox constraints.",
+                            "Use retrieval_mode_hint=hybrid for mixed topic-and-filter searches.",
+                            "Use retrieval_mode_hint=semantic for broad exploratory meaning-based searches without tight filters.",
                             "Use output_mode=bullet_points for list-like or summary-over-multiple-email requests.",
                             "Use output_mode=table only when the user explicitly asks for a table.",
                             "Use output_mode=raw_list when the user explicitly asks for a raw list.",
@@ -175,6 +178,10 @@ class GmailQueryBuilder:
         if sender:
             clauses.append(f"from:{self._escape_token(sender)}")
 
+        subject = (structured_intent.search_filters.subject or "").strip()
+        if subject:
+            clauses.append(f"subject:{self._escape_token(subject)}")
+
         for group in structured_intent.search_filters.grouped_terms():
             group_clause = " OR ".join(self._escape_token(term) for term in group)
             if group_clause:
@@ -214,6 +221,7 @@ class QueryExecutionPlanner:
     def build(
         self,
         *,
+        account_id: str,
         question: str,
         structured_intent: EmailSearchIntent,
         reference_date: date | None = None,
@@ -221,25 +229,46 @@ class QueryExecutionPlanner:
         search_filters: dict | None = None,
     ):
         merged_sender = (search_filters or {}).get("sender") or structured_intent.search_filters.sender
+        merged_subject = (search_filters or {}).get("subject") or structured_intent.search_filters.subject
         date_from = (search_filters or {}).get("date_from") or self._date_to_string(structured_intent.date_range.start_date)
         date_to = (search_filters or {}).get("date_to") or self._date_to_string(structured_intent.date_range.end_date)
-
-        keyword_groups = structured_intent.search_filters.grouped_terms()
+        keyword_terms = structured_intent.search_filters.ordered_terms()
         semantic_query_text = self._build_semantic_query_text(question=question, structured_intent=structured_intent)
+        strategy = self._resolve_strategy(
+            structured_intent=structured_intent,
+            merged_sender=merged_sender,
+            merged_subject=merged_subject,
+            date_from=date_from,
+            date_to=date_to,
+            category_filters=category_filters or [],
+        )
+        result_limit = self._resolve_result_limit(structured_intent=structured_intent)
+        candidate_limit = self._resolve_candidate_limit(
+            structured_intent=structured_intent,
+            strategy=strategy,
+            result_limit=result_limit,
+        )
 
         return QueryExecutionPlan(
+            account_id=account_id,
             question=question,
             reference_date=reference_date or _utc_today(),
             structured_intent=structured_intent,
+            strategy=strategy,
+            selection_policy=structured_intent.result_scope,
+            candidate_limit=candidate_limit,
+            result_limit=result_limit,
             gmail_query=self.gmail_query_builder.build(structured_intent, category_filters=category_filters),
             semantic_query_text=semantic_query_text,
             metadata_filters={
                 "sender": merged_sender,
-                "subject": (search_filters or {}).get("subject") or None,
+                "subject": merged_subject,
                 "date_from": date_from,
                 "date_to": date_to,
             },
-            keyword_groups=keyword_groups,
+            category_filters=list(category_filters or []),
+            keyword_terms=keyword_terms,
+            must_apply_filters=True,
         )
 
     def _build_semantic_query_text(self, *, question: str, structured_intent: EmailSearchIntent):
@@ -253,6 +282,10 @@ class QueryExecutionPlanner:
         if sender:
             parts.append(f"Sender focus: {sender}")
 
+        subject = (structured_intent.search_filters.subject or "").strip()
+        if subject:
+            parts.append(f"Subject focus: {subject}")
+
         if structured_intent.search_filters.is_important:
             parts.append("Importance focus: important or urgent messages")
 
@@ -265,3 +298,54 @@ class QueryExecutionPlanner:
 
     def _date_to_string(self, value: date | None):
         return value.isoformat() if value is not None else None
+
+    def _resolve_strategy(
+        self,
+        *,
+        structured_intent: EmailSearchIntent,
+        merged_sender: str | None,
+        merged_subject: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        category_filters: list[str],
+    ):
+        hint = structured_intent.retrieval_mode_hint
+        ordered_terms = structured_intent.search_filters.ordered_terms()
+        filter_strength = sum(
+            1
+            for value in (
+                merged_sender,
+                merged_subject,
+                date_from,
+                date_to,
+            )
+            if value
+        ) + (1 if category_filters else 0)
+
+        if hint == "exact":
+            return "exact"
+        if hint == "semantic" and filter_strength == 0:
+            return "semantic"
+        if structured_intent.result_scope == "all" and filter_strength >= 1 and not ordered_terms:
+            return "exact"
+        if filter_strength >= 2 and structured_intent.result_scope in {"all", "best_match"}:
+            return "exact" if not ordered_terms else "hybrid"
+        if ordered_terms and filter_strength >= 1:
+            return "hybrid"
+        if ordered_terms:
+            return "hybrid"
+        return "semantic"
+
+    def _resolve_result_limit(self, *, structured_intent: EmailSearchIntent):
+        if structured_intent.result_scope == "best_match":
+            return 1
+        if structured_intent.result_scope == "all":
+            return structured_intent.requested_count or 25
+        return structured_intent.requested_count or 6
+
+    def _resolve_candidate_limit(self, *, structured_intent: EmailSearchIntent, strategy: str, result_limit: int):
+        if strategy == "exact":
+            return max(result_limit * 4, 50)
+        if strategy == "hybrid":
+            return max(result_limit * 6, 24)
+        return max(result_limit * 8, 24)

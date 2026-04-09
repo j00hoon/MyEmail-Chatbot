@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class SyncRequest(BaseModel):
     count: int = Field(default=10, ge=1, le=50)
+    account_id: str | None = None
 
 
 class SyncResponse(BaseModel):
@@ -50,6 +51,7 @@ class EmailSearchFilters(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     semantic_expansions: list[str] = Field(default_factory=list)
     sender: str | None = None
+    subject: str | None = None
     is_important: bool = False
 
     def ordered_terms(self):
@@ -89,6 +91,10 @@ class EmailSearchIntent(BaseModel):
     ] = "SEARCH_EMAILS"
     search_filters: EmailSearchFilters = Field(default_factory=EmailSearchFilters)
     date_range: DateRange = Field(default_factory=DateRange)
+    result_scope: Literal["all", "top_n", "best_match"] = "top_n"
+    aggregation_mode: Literal["emails", "threads", "senders"] = "emails"
+    retrieval_mode_hint: Literal["exact", "hybrid", "semantic"] = "hybrid"
+    requested_count: int | None = Field(default=None, ge=1, le=50)
     output_mode: Literal[
         "concise_summary",
         "bullet_points",
@@ -102,6 +108,20 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=4, ge=1, le=10)
     category_filters: list[str] = Field(default_factory=list)
     search_filters: SearchFilters = Field(default_factory=SearchFilters)
+    account_id: str | None = None
+
+
+class GmailAccountResponse(BaseModel):
+    account_id: str
+    email_address: str | None = None
+    display_name: str | None = None
+    token_path: str
+    is_active: bool
+
+
+class ConnectAccountRequest(BaseModel):
+    account_id: str | None = Field(default=None, min_length=1)
+    make_active: bool = True
 
 
 class SourceReference(BaseModel):

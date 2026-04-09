@@ -20,13 +20,13 @@ class IngestionAgent:
     metadata_store: MetadataStore
     vector_store: VectorStore
 
-    def run(self, max_results: int, progress_callback=None):
-        history_id = self.metadata_store.get_sync_value("historyId")
-        pending_history_id = self.metadata_store.get_sync_value("pendingHistoryId")
+    def run(self, max_results: int, progress_callback=None, account_id: str = "local_default"):
+        history_id = self.metadata_store.get_sync_value("historyId", account_id=account_id)
+        pending_history_id = self.metadata_store.get_sync_value("pendingHistoryId", account_id=account_id)
 
         if history_id:
             try:
-                return self._run_incremental_sync(history_id=history_id, progress_callback=progress_callback)
+                return self._run_incremental_sync(history_id=history_id, progress_callback=progress_callback, account_id=account_id)
             except HistoryIdExpiredError:
                 if progress_callback is not None:
                     progress_callback(
@@ -35,37 +35,39 @@ class IngestionAgent:
                         detail="Stored Gmail history expired. Falling back to full mailbox sync.",
                     )
 
-        if pending_history_id and self.metadata_store.count_emails() > 0:
+        if pending_history_id and self.metadata_store.count_emails(account_id=account_id) > 0:
             return self._resume_full_sync(
                 history_id=pending_history_id,
                 progress_callback=progress_callback,
+                account_id=account_id,
             )
 
         if (
             not history_id
             and not pending_history_id
-            and self.metadata_store.count_emails() > 0
-            and self.metadata_store.count_unindexed_emails() > 0
+            and self.metadata_store.count_emails(account_id=account_id) > 0
+            and self.metadata_store.count_unindexed_emails(account_id=account_id) > 0
         ):
-            resumed_history_id = GmailClient().get_current_history_id()
-            self.metadata_store.set_sync_value("pendingHistoryId", resumed_history_id)
+            resumed_history_id = GmailClient(account_id=account_id).get_current_history_id()
+            self.metadata_store.set_sync_value("pendingHistoryId", resumed_history_id, account_id=account_id)
             return self._resume_full_sync(
                 history_id=resumed_history_id,
                 progress_callback=progress_callback,
+                account_id=account_id,
             )
 
-        return self._run_full_sync(progress_callback=progress_callback)
+        return self._run_full_sync(progress_callback=progress_callback, account_id=account_id)
 
-    def _run_full_sync(self, progress_callback=None):
+    def _run_full_sync(self, progress_callback=None, account_id: str = "local_default"):
         if progress_callback is not None:
             progress_callback(
                 stage="Connecting to Gmail",
                 progress=10,
                 detail="Authenticating with Gmail and preparing full mailbox sync.",
             )
-        self.metadata_store.clear_all_emails()
-        self.metadata_store.delete_sync_value("historyId")
-        self.vector_store.clear()
+        self.metadata_store.clear_all_emails(account_id=account_id)
+        self.metadata_store.delete_sync_value("historyId", account_id=account_id)
+        self.vector_store.clear(account_id=account_id)
 
         if progress_callback is not None:
             progress_callback(
@@ -84,12 +86,12 @@ class IngestionAgent:
                 fetched_count=fetched_count,
             )
 
-        full_sync = GmailFetchSkill().execute_full_sync(progress_callback=on_fetch_progress)
+        full_sync = GmailFetchSkill().execute_full_sync(progress_callback=on_fetch_progress, account_id=account_id)
         fetched_emails = full_sync.emails
         saved_emails = []
         total = max(len(fetched_emails), 1)
         for index, email in enumerate(fetched_emails, start=1):
-            saved_emails.append(self.metadata_store.upsert_email(email))
+            saved_emails.append(self.metadata_store.upsert_email(email, account_id=account_id))
             if progress_callback is not None:
                 progress_callback(
                     stage="Normalizing email content",
@@ -98,7 +100,7 @@ class IngestionAgent:
                     fetched_count=len(fetched_emails),
                     saved_count=index,
                 )
-        self.metadata_store.set_sync_value("pendingHistoryId", full_sync.history_id)
+        self.metadata_store.set_sync_value("pendingHistoryId", full_sync.history_id, account_id=account_id)
         return IngestionResult(
             mode="full",
             saved_emails=saved_emails,
@@ -107,9 +109,9 @@ class IngestionAgent:
             history_id=full_sync.history_id,
         )
 
-    def _resume_full_sync(self, history_id: str, progress_callback=None):
-        total_emails = self.metadata_store.count_emails()
-        remaining_emails = self.metadata_store.count_unindexed_emails()
+    def _resume_full_sync(self, history_id: str, progress_callback=None, account_id: str = "local_default"):
+        total_emails = self.metadata_store.count_emails(account_id=account_id)
+        remaining_emails = self.metadata_store.count_unindexed_emails(account_id=account_id)
         if progress_callback is not None:
             progress_callback(
                 stage="Refreshing vector index",
@@ -130,7 +132,7 @@ class IngestionAgent:
             history_id=history_id,
         )
 
-    def _run_incremental_sync(self, history_id: str, progress_callback=None):
+    def _run_incremental_sync(self, history_id: str, progress_callback=None, account_id: str = "local_default"):
         if progress_callback is not None:
             progress_callback(
                 stage="Connecting to Gmail",
@@ -159,12 +161,14 @@ class IngestionAgent:
         delta = GmailFetchSkill().execute_incremental_sync(
             history_id=history_id,
             progress_callback=on_history_progress,
+            account_id=account_id,
         )
 
         deleted_email_ids = self.metadata_store.delete_emails_by_gmail_message_ids(
             delta.deleted_message_ids,
+            account_id=account_id,
         )
-        self.vector_store.delete_by_email_ids(deleted_email_ids)
+        self.vector_store.delete_by_email_ids(deleted_email_ids, account_id=account_id)
 
         if progress_callback is not None:
             progress_callback(
@@ -181,7 +185,7 @@ class IngestionAgent:
         saved_emails = []
         total = max(len(delta.emails), 1)
         for index, email in enumerate(delta.emails, start=1):
-            saved_emails.append(self.metadata_store.upsert_email(email))
+            saved_emails.append(self.metadata_store.upsert_email(email, account_id=account_id))
             if progress_callback is not None:
                 progress_callback(
                     stage="Normalizing email content",

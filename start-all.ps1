@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $projectRoot "backend"
 $frontendDir = Join-Path $projectRoot "frontend"
 $pythonExe = Join-Path $backendDir "venv\Scripts\python.exe"
-$npmCmd = "npm.cmd"
+$npmCmd = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
 $backendUrl = "http://127.0.0.1:8000"
 $backendHealthUrl = "$backendUrl/api/health"
 $frontendUrl = "http://127.0.0.1:5173"
@@ -15,6 +15,10 @@ if (-not (Test-Path $pythonExe)) {
 
 if (-not (Test-Path $frontendDir)) {
     Write-Error "Frontend directory was not found: $frontendDir"
+}
+
+if (-not $npmCmd) {
+    Write-Error "npm.cmd was not found in PATH."
 }
 
 function Test-PortListening {
@@ -28,7 +32,7 @@ function Wait-ForHttpReady {
     param(
         [string]$Url,
         [string]$Label,
-        [int]$TimeoutSeconds = 60
+        [int]$TimeoutSeconds = 120
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -44,6 +48,26 @@ function Wait-ForHttpReady {
     }
 
     throw "$Label did not become ready within $TimeoutSeconds seconds: $Url"
+}
+
+function Start-CommandWindow {
+    param(
+        [string]$Title,
+        [string]$WorkingDirectory,
+        [string]$Command
+    )
+
+    $wrappedCommand = @"
+`$Host.UI.RawUI.WindowTitle = '$Title'
+Set-Location -LiteralPath '$WorkingDirectory'
+$Command
+"@
+
+    Start-Process powershell.exe -ArgumentList @(
+        "-NoExit",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", $wrappedCommand
+    ) | Out-Null
 }
 
 function Open-Browser {
@@ -68,11 +92,10 @@ Write-Host "[1/2] Starting FastAPI backend..." -ForegroundColor Cyan
 if (Test-PortListening -Port 8000) {
     Write-Host "FastAPI backend is already running on port 8000." -ForegroundColor Green
 } else {
-    Start-Process powershell.exe -ArgumentList @(
-        "-NoExit",
-        "-Command",
-        "Set-Location '$backendDir'; & '$pythonExe' '-m' 'uvicorn' 'app:app' '--host' '127.0.0.1' '--port' '8000' '--reload'"
-    ) | Out-Null
+    Start-CommandWindow `
+        -Title "myEmail-chatbot backend" `
+        -WorkingDirectory $backendDir `
+        -Command "& '$pythonExe' -m uvicorn app:app --host 127.0.0.1 --port 8000"
 }
 Wait-ForHttpReady -Url $backendHealthUrl -Label "FastAPI backend"
 
@@ -80,11 +103,10 @@ Write-Host "[2/2] Starting React frontend..." -ForegroundColor Cyan
 if (Test-PortListening -Port 5173) {
     Write-Host "React frontend is already running on port 5173." -ForegroundColor Green
 } else {
-    Start-Process powershell.exe -ArgumentList @(
-        "-NoExit",
-        "-Command",
-        "Set-Location '$frontendDir'; & '$npmCmd' 'run' 'dev' '--' '--host' '127.0.0.1' '--port' '5173' '--strictPort'"
-    ) | Out-Null
+    Start-CommandWindow `
+        -Title "myEmail-chatbot frontend" `
+        -WorkingDirectory $frontendDir `
+        -Command "& '$npmCmd' run dev -- --host 127.0.0.1 --port 5173 --strictPort"
 }
 Wait-ForHttpReady -Url $frontendUrl -Label "React frontend"
 

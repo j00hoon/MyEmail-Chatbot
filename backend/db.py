@@ -31,7 +31,7 @@ def create_session_factory(database_url: str):
 
 def init_db(database_url: str):
     engine, _ = create_session_factory(database_url)
-    from models import EmailRecord, SyncMeta  # noqa: F401
+    from models import EmailRecord, GmailAccount, SyncMeta  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _run_post_create_migrations(engine, database_url)
@@ -44,11 +44,114 @@ def _run_post_create_migrations(engine, database_url: str):
 
     inspector = inspect(engine)
     email_columns = {column["name"] for column in inspector.get_columns("emails")}
+    sync_meta_columns = {column["name"] for column in inspector.get_columns("sync_meta")}
 
     with engine.begin() as connection:
-        if "gmail_category" not in email_columns:
-            connection.execute(text("ALTER TABLE emails ADD COLUMN gmail_category TEXT"))
-            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_emails_gmail_category ON emails (gmail_category)"))
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS gmail_accounts (
+                id INTEGER PRIMARY KEY,
+                account_id TEXT NOT NULL UNIQUE,
+                email_address TEXT,
+                display_name TEXT,
+                token_path TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_gmail_accounts_email_address ON gmail_accounts (email_address)"
+        )
+
+        if "account_id" not in email_columns:
+            connection.exec_driver_sql("DROP TABLE IF EXISTS emails_legacy_backup")
+            connection.exec_driver_sql("ALTER TABLE emails RENAME TO emails_legacy_backup")
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE emails (
+                    id INTEGER PRIMARY KEY,
+                    account_id TEXT NOT NULL DEFAULT 'local_default',
+                    gmail_message_id TEXT NOT NULL,
+                    thread_id TEXT,
+                    subject TEXT NOT NULL DEFAULT '',
+                    sender TEXT,
+                    recipients TEXT,
+                    sent_at TEXT,
+                    gmail_category TEXT,
+                    snippet TEXT,
+                    body_text TEXT,
+                    attachment_names TEXT,
+                    raw_payload TEXT,
+                    indexed_at DATETIME,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO emails (
+                    id, account_id, gmail_message_id, thread_id, subject, sender, recipients, sent_at,
+                    gmail_category, snippet, body_text, attachment_names, raw_payload, indexed_at, created_at, updated_at
+                )
+                SELECT
+                    id, 'local_default', gmail_message_id, thread_id, subject, sender, recipients, sent_at,
+                    gmail_category, snippet, body_text, attachment_names, raw_payload, indexed_at, created_at, updated_at
+                FROM emails_legacy_backup
+                """
+            )
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_emails_account_id ON emails (account_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_emails_gmail_message_id ON emails (gmail_message_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_emails_gmail_category ON emails (gmail_category)")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_emails_account_message ON emails (account_id, gmail_message_id)")
+        else:
+            if "gmail_category" not in email_columns:
+                connection.execute(text("ALTER TABLE emails ADD COLUMN gmail_category TEXT"))
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_emails_account_id ON emails (account_id)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_emails_gmail_category ON emails (gmail_category)")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_emails_account_message ON emails (account_id, gmail_message_id)")
+
+        if "id" not in sync_meta_columns:
+            connection.exec_driver_sql("DROP TABLE IF EXISTS sync_meta_legacy_backup")
+            connection.exec_driver_sql("ALTER TABLE sync_meta RENAME TO sync_meta_legacy_backup")
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE sync_meta (
+                    id INTEGER PRIMARY KEY,
+                    account_id TEXT NOT NULL DEFAULT 'local_default',
+                    key TEXT NOT NULL,
+                    value TEXT,
+                    last_synced_at DATETIME,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO sync_meta (account_id, key, value, last_synced_at, updated_at)
+                SELECT 'local_default', key, value, last_synced_at, updated_at
+                FROM sync_meta_legacy_backup
+                """
+            )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_meta_account_key ON sync_meta (account_id, key)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_sync_meta_account_id ON sync_meta (account_id)"
+            )
+        else:
+            if "account_id" not in sync_meta_columns:
+                connection.execute(
+                    text("ALTER TABLE sync_meta ADD COLUMN account_id TEXT NOT NULL DEFAULT 'local_default'")
+                )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_meta_account_key ON sync_meta (account_id, key)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_sync_meta_account_id ON sync_meta (account_id)"
+            )
 
         connection.exec_driver_sql(
             """
@@ -93,6 +196,10 @@ def _run_post_create_migrations(engine, database_url: str):
             """
         )
         connection.exec_driver_sql("INSERT INTO emails_fts(emails_fts) VALUES ('rebuild')")
+
+        connection.exec_driver_sql(
+            "INSERT OR IGNORE INTO gmail_accounts (account_id, token_path, is_active) VALUES ('local_default', 'token.json', 1)"
+        )
 
         rows = connection.execute(
             text(

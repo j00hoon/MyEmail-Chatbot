@@ -1,6 +1,7 @@
 import base64
 from dataclasses import dataclass
 import json
+from pathlib import Path
 from typing import Any
 
 from google.auth.exceptions import RefreshError
@@ -49,10 +50,14 @@ class HistoryIdExpiredError(Exception):
 
 
 class GmailClient:
+    def __init__(self, account_id: str | None = None, token_path=None):
+        self.account_id = account_id or settings.default_mailbox_id
+        self.token_path = token_path or self._resolve_token_path(self.account_id)
+
     def get_service(self):
         creds = None
-        if settings.token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(settings.token_path), SCOPES)
+        if self.token_path.exists():
+            creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -60,13 +65,14 @@ class GmailClient:
                     creds.refresh(Request())
                 except RefreshError:
                     creds = None
-                    settings.token_path.unlink(missing_ok=True)
+                    self.token_path.unlink(missing_ok=True)
 
             if not creds or not creds.valid:
                 creds = self._run_oauth_flow()
-                settings.token_path.write_text(creds.to_json(), encoding="utf-8")
-        elif settings.token_path.exists():
-            settings.token_path.write_text(creds.to_json(), encoding="utf-8")
+                self.token_path.parent.mkdir(parents=True, exist_ok=True)
+                self.token_path.write_text(creds.to_json(), encoding="utf-8")
+        elif self.token_path.exists():
+            self.token_path.write_text(creds.to_json(), encoding="utf-8")
 
         return build("gmail", "v1", credentials=creds)
 
@@ -85,6 +91,27 @@ class GmailClient:
         service = service or self.get_service()
         profile = service.users().getProfile(userId="me").execute()
         return str(profile["historyId"])
+
+    def get_profile(self, service=None):
+        service = service or self.get_service()
+        return service.users().getProfile(userId="me").execute()
+
+    def migrate_token_to_account(self, account_id: str):
+        target_path = self._resolve_token_path(account_id)
+
+        if Path(self.token_path) == Path(target_path):
+            self.account_id = account_id
+            self.token_path = target_path
+            return target_path
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.token_path.exists():
+            target_path.write_text(self.token_path.read_text(encoding="utf-8"), encoding="utf-8")
+            self.token_path.unlink(missing_ok=True)
+
+        self.account_id = account_id
+        self.token_path = target_path
+        return target_path
 
     def fetch_full_sync(self, progress_callback=None):
         service = self.get_service()
@@ -109,6 +136,8 @@ class GmailClient:
                     .get(userId="me", id=message["id"], format="full")
                     .execute()
                 )
+                if self._is_excluded(detail):
+                    continue
                 emails.append(self._parse_email(detail))
 
             if progress_callback is not None:
@@ -201,6 +230,10 @@ class GmailClient:
                     continue
                 raise
 
+            if self._is_excluded(detail):
+                deleted_message_ids.add(message_id)
+                continue
+
             emails.append(self._parse_email(detail))
             if progress_callback is not None:
                 progress_callback(
@@ -232,6 +265,8 @@ class GmailClient:
                 .get(userId="me", id=message["id"], format="full")
                 .execute()
             )
+            if self._is_excluded(detail):
+                continue
             emails.append(self._parse_email(detail))
         return emails
 
@@ -309,3 +344,15 @@ class GmailClient:
             if mapped:
                 return mapped
         return "uncategorized"
+
+    def _is_excluded(self, detail: dict[str, Any]):
+        label_ids = detail.get("labelIds", []) or []
+        excluded_labels = {"TRASH", "SPAM"}
+        return any(label_id in excluded_labels for label_id in label_ids)
+
+    def _resolve_token_path(self, account_id: str):
+        if account_id == settings.default_mailbox_id and settings.token_path:
+            return settings.token_path
+        settings.token_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(character if character.isalnum() or character in {"-", "_"} else "_" for character in account_id)
+        return settings.token_dir / f"{safe_name}.json"

@@ -50,6 +50,10 @@ class Settings:
         os.getenv("GMAIL_TOKEN_PATH", ""),
         BASE_DIR / "token.json",
     )
+    token_dir: Path = _resolve_path(
+        os.getenv("GMAIL_TOKEN_DIR", ""),
+        BASE_DIR / "tokens",
+    )
     redis_enabled: bool = os.getenv("REDIS_ENABLED", "false").lower() in {
         "1",
         "true",

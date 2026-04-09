@@ -109,6 +109,20 @@ Long term direction:
   - date range
   - tab/category
 - Structured filters now bypass unnecessary vector search and can directly select matching source emails
+- Multi-account support is now wired end-to-end:
+  - connected Gmail accounts can be added and selected from the UI
+  - sync/chat requests now run against the selected `account_id`
+  - legacy `local_default` mailbox data was migrated into the real Gmail account
+- `local_default` is now treated as a legacy placeholder and hidden from normal account selection UI when no real email address is attached
+- Gmail account connection flow was simplified so `Add account` now launches OAuth directly and stores the authenticated Gmail address as the account identity
+- Windows start scripts were simplified so `start-all.ps1` again launches backend/frontend directly in separate PowerShell windows
+- Messages labeled `TRASH` or `SPAM` are now excluded from future syncs and were removed from the local metadata/vector stores
+- Retrieval no longer treats trashed/spam messages as searchable candidate emails
+- Live Gmail API checks confirmed that several messages the user perceived as Primary are currently returned by Gmail API as `CATEGORY_UPDATES` with labels such as:
+  - `IMPORTANT`
+  - `CATEGORY_UPDATES`
+  - `INBOX`
+- This means current `gmail_category` reflects Gmail API labels accurately, but may still diverge from the user's perceived Inbox tab experience
 
 - 백엔드를 Flask에서 FastAPI로 변경함
 - Agent 구조 추가:
@@ -191,6 +205,17 @@ Long term direction:
   - date range
   - tab/category
 - 구조 필터가 있는 경우 불필요한 vector search를 건너뛰고 직접 source email을 선택하도록 개선
+- 멀티 계정 흐름이 실제 sync/chat 경로까지 연결됨:
+  - 연결된 Gmail 계정을 UI에서 추가/선택 가능
+  - sync/chat 요청이 선택된 `account_id` 기준으로 동작
+  - 기존 `local_default` 메일 데이터는 실제 Gmail 계정으로 마이그레이션함
+- `local_default`는 레거시 placeholder로 취급하고, 실제 이메일 주소가 없으면 일반 계정 선택 UI에서 숨기도록 조정함
+- Gmail 계정 연결 흐름을 단순화하여 `Add account` 클릭 시 바로 OAuth를 시작하고, 인증된 Gmail 주소를 계정 식별자로 저장하도록 변경함
+- Windows 실행 스크립트를 다시 단순화하여 `start-all.ps1`이 백엔드/프론트를 별도 PowerShell 창에서 직접 실행하도록 정리함
+- `TRASH` 및 `SPAM` 라벨 메일은 앞으로 sync 대상에서 제외되며, 기존 로컬 metadata/vector 저장소에서도 삭제함
+- retrieval 후보에서도 휴지통/스팸 메일이 검색되지 않도록 제외 처리함
+- 실시간 Gmail API 비교 결과, 사용자가 Primary처럼 인식한 일부 메일도 현재 Gmail API 기준으로는 `CATEGORY_UPDATES` + `INBOX` 조합으로 내려오는 것을 확인함
+- 즉 현재 `gmail_category`는 Gmail API 라벨을 정확히 반영하지만, 사용자의 체감 Inbox 탭과는 어긋날 수 있음
 
 ### Storage
 
@@ -431,6 +456,9 @@ Long term direction:
 - Multi-email summary/list questions are still not fully modeled by the new planner structure and need explicit retrieval-contract handling
 - Current chat path still mixes legacy heuristics with the new planner-oriented direction, so the refactor is in progress rather than fully complete
 - Recent-email list requests are now covered, but broader list/filter combinations still need to be folded into the planner consistently
+- Gmail API category labels appear trustworthy as raw source metadata, but not fully trustworthy as the sole UX/search tab model for "Primary-like" mail
+- Some user-important emails (billing, insurance, housing, medical/logistics) can still arrive from Gmail API as `updates`, so strict category filtering can hide expected results
+- Current fallback message `"Try syncing Gmail first"` is misleading when the true issue is "no emails matched the selected date/category filters"
 
 - 검색 정확도는 좋아졌지만, 일부 부분적으로 관련 있는 메일까지 함께 끌어올 수 있음
 - 일부 메일은 뉴스레터/이메일 마크업 찌꺼기가 아직 남을 수 있음
@@ -448,6 +476,9 @@ Long term direction:
 - Cohere compression은 optional이며 `COHERE_API_KEY`가 있을 때만 활성화됨
 - 현재 chat path는 legacy heuristic과 planner 지향 구조가 혼재된 상태라, 리팩터링이 진행 중인 단계임
 - recent-email list 요청은 반영됐지만, 더 다양한 list/filter 조합은 planner 구조로 계속 편입이 필요함
+- Gmail API category는 원본 메타데이터로는 유효하지만, 사용자가 기대하는 "중요 메일/Primary 느낌"을 단독으로 대표하기에는 신뢰도가 낮을 수 있음
+- 청구/보험/주거/의료/일정성 메일도 Gmail API에서는 `updates`로 내려올 수 있어, category 필터를 엄격히 쓰면 기대 결과가 숨겨질 수 있음
+- 현재 `"Try syncing Gmail first"` fallback 문구는 실제 원인이 필터 결과 없음일 때도 부정확하게 보일 수 있음
 
 ## Recommended Next Steps | 추천 다음 단계
 
@@ -468,6 +499,11 @@ Long term direction:
   - SelfQueryRetriever on a metadata-filter-friendly vector store
   - Cohere rerank evaluation
   - retrieval quality A/B comparison
+- Introduce app-owned mailbox classification separate from Gmail category:
+  - keep `gmail_category` as raw source metadata
+  - add a new `app_category` (or similar) for product-facing filtering
+  - start with rule/heuristic classification, then optionally add LLM-assisted fallback for ambiguous emails
+- Rework the UI tab model so search tabs can rely on app-owned classification rather than Gmail API category alone
 - Add stronger ranking:
   - sender boosting
   - recency boosting
@@ -483,6 +519,11 @@ Long term direction:
   - metadata filter 친화적 vector store 위의 SelfQueryRetriever
   - Cohere rerank 평가
   - retrieval quality A/B 비교
+- Gmail category와 분리된 앱 자체 분류 체계 도입:
+  - `gmail_category`는 원본 메타데이터로 유지
+  - `app_category` 같은 앱 전용 분류 컬럼 추가
+  - 초기는 rule/heuristic 기반으로 시작하고, 애매한 경우에만 LLM 보조 분류를 고려
+- UI 탭/검색 필터를 Gmail API category 단독 의존에서 앱 자체 분류 중심으로 재설계
 - 더 강한 ranking 추가:
   - sender boosting
   - recency boosting

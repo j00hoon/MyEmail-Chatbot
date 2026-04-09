@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 
 from db import create_session_factory
-from models import EmailRecord, SyncMeta
-from schemas import EmailRecordResponse
+from models import EmailRecord, GmailAccount, SyncMeta
+from schemas import EmailRecordResponse, GmailAccountResponse
 
 
 @dataclass
@@ -18,17 +18,103 @@ class MetadataStore:
     def __post_init__(self):
         self.engine, self.session_factory = create_session_factory(self.database_url)
 
-    def upsert_email(self, email_payload):
+    def list_accounts(self):
+        with self.session_factory() as session:
+            records = session.query(GmailAccount).order_by(GmailAccount.created_at.asc(), GmailAccount.id.asc()).all()
+            return [self._account_to_response(record) for record in records]
+
+    def get_account(self, account_id: str):
+        with self.session_factory() as session:
+            record = session.query(GmailAccount).filter(GmailAccount.account_id == account_id).one_or_none()
+            if record is None:
+                return None
+            return self._account_to_response(record)
+
+    def get_active_account(self):
+        with self.session_factory() as session:
+            record = session.query(GmailAccount).filter(GmailAccount.is_active.is_(True)).order_by(GmailAccount.id.asc()).one_or_none()
+            if record is None:
+                return None
+            return self._account_to_response(record)
+
+    def upsert_account(self, account_id: str, token_path: str, email_address: str | None = None, display_name: str | None = None, make_active: bool = False):
+        with self.session_factory() as session:
+            record = session.query(GmailAccount).filter(GmailAccount.account_id == account_id).one_or_none()
+            if record is None:
+                record = GmailAccount(account_id=account_id)
+                session.add(record)
+            record.token_path = token_path
+            record.email_address = email_address
+            record.display_name = display_name
+            if make_active:
+                session.query(GmailAccount).update({"is_active": False}, synchronize_session=False)
+                record.is_active = True
+            elif record.is_active is None:
+                record.is_active = False
+            session.commit()
+            session.refresh(record)
+            return self._account_to_response(record)
+
+    def set_active_account(self, account_id: str):
+        with self.session_factory() as session:
+            record = session.query(GmailAccount).filter(GmailAccount.account_id == account_id).one_or_none()
+            if record is None:
+                return None
+            session.query(GmailAccount).update({"is_active": False}, synchronize_session=False)
+            record.is_active = True
+            session.commit()
+            session.refresh(record)
+            return self._account_to_response(record)
+
+    def migrate_account_id(self, from_account_id: str, to_account_id: str):
+        if not from_account_id or not to_account_id or from_account_id == to_account_id:
+            return False
+
+        with self.session_factory() as session:
+            source = session.query(GmailAccount).filter(GmailAccount.account_id == from_account_id).one_or_none()
+            target = session.query(GmailAccount).filter(GmailAccount.account_id == to_account_id).one_or_none()
+            if source is None or target is None:
+                return False
+
+            target_email_count = session.query(EmailRecord).filter(EmailRecord.account_id == to_account_id).count()
+            target_sync_count = session.query(SyncMeta).filter(SyncMeta.account_id == to_account_id).count()
+            if target_email_count or target_sync_count:
+                return False
+
+            session.query(EmailRecord).filter(EmailRecord.account_id == from_account_id).update(
+                {"account_id": to_account_id},
+                synchronize_session=False,
+            )
+            session.query(SyncMeta).filter(SyncMeta.account_id == from_account_id).update(
+                {"account_id": to_account_id},
+                synchronize_session=False,
+            )
+
+            if not target.email_address and source.email_address:
+                target.email_address = source.email_address
+            if not target.display_name and source.display_name:
+                target.display_name = source.display_name
+            if source.is_active:
+                session.query(GmailAccount).update({"is_active": False}, synchronize_session=False)
+                target.is_active = True
+
+            session.delete(source)
+            session.commit()
+            session.refresh(target)
+            return True
+
+    def upsert_email(self, email_payload, account_id: str):
         with self.session_factory() as session:
             record = (
                 session.query(EmailRecord)
-                .filter(EmailRecord.gmail_message_id == email_payload.gmail_message_id)
+                .filter(EmailRecord.account_id == account_id, EmailRecord.gmail_message_id == email_payload.gmail_message_id)
                 .one_or_none()
             )
             if record is None:
-                record = EmailRecord(gmail_message_id=email_payload.gmail_message_id)
+                record = EmailRecord(account_id=account_id, gmail_message_id=email_payload.gmail_message_id)
                 session.add(record)
 
+            record.account_id = account_id
             record.thread_id = email_payload.thread_id
             record.subject = email_payload.subject
             record.sender = email_payload.sender
@@ -43,22 +129,28 @@ class MetadataStore:
             session.refresh(record)
             return self._to_response(record)
 
-    def clear_all_emails(self):
+    def clear_all_emails(self, account_id: str):
         with self.session_factory() as session:
-            session.query(EmailRecord).delete()
+            session.query(EmailRecord).filter(EmailRecord.account_id == account_id).delete()
             session.commit()
 
-    def count_emails(self):
+    def count_emails(self, account_id: str):
         with self.session_factory() as session:
-            return session.query(EmailRecord).count()
+            query = session.query(EmailRecord).filter(EmailRecord.account_id == account_id)
+            return self._exclude_trashed_query(query).count()
 
-    def count_unindexed_emails(self):
+    def count_unindexed_emails(self, account_id: str):
         with self.session_factory() as session:
-            return session.query(EmailRecord).filter(EmailRecord.indexed_at.is_(None)).count()
+            query = session.query(EmailRecord).filter(
+                EmailRecord.account_id == account_id,
+                EmailRecord.indexed_at.is_(None),
+            )
+            return self._exclude_trashed_query(query).count()
 
-    def list_emails(self, limit: int, category_filters: list[str] | None = None, search_filters: dict | None = None):
+    def list_emails(self, limit: int, account_id: str, category_filters: list[str] | None = None, search_filters: dict | None = None):
         with self.session_factory() as session:
-            query = session.query(EmailRecord)
+            query = session.query(EmailRecord).filter(EmailRecord.account_id == account_id)
+            query = self._exclude_trashed_query(query)
             if category_filters:
                 query = query.filter(EmailRecord.gmail_category.in_(category_filters))
             if search_filters and search_filters.get("sender"):
@@ -72,9 +164,10 @@ class MetadataStore:
             )[:limit]
             return records
 
-    def get_emails_for_indexing(self, email_ids: list[int] | None = None, category_filters: list[str] | None = None, search_filters: dict | None = None):
+    def get_emails_for_indexing(self, account_id: str, email_ids: list[int] | None = None, category_filters: list[str] | None = None, search_filters: dict | None = None):
         with self.session_factory() as session:
-            query = session.query(EmailRecord).order_by(EmailRecord.id.desc())
+            query = session.query(EmailRecord).filter(EmailRecord.account_id == account_id).order_by(EmailRecord.id.desc())
+            query = self._exclude_trashed_query(query)
             if email_ids is not None:
                 query = query.filter(EmailRecord.id.in_(email_ids))
             if category_filters:
@@ -86,21 +179,21 @@ class MetadataStore:
             records = query.all()
             return self._apply_date_filters([self._to_response(record) for record in records], search_filters)
 
-    def get_unindexed_emails_for_indexing(self):
+    def get_unindexed_emails_for_indexing(self, account_id: str):
         with self.session_factory() as session:
             records = (
-                session.query(EmailRecord)
-                .filter(EmailRecord.indexed_at.is_(None))
+                self._exclude_trashed_query(session.query(EmailRecord))
+                .filter(EmailRecord.account_id == account_id, EmailRecord.indexed_at.is_(None))
                 .order_by(EmailRecord.id.desc())
                 .all()
             )
             return [self._to_response(record) for record in records]
 
-    def mark_indexed(self, email_id: int, indexed_at: datetime):
+    def mark_indexed(self, email_id: int, indexed_at: datetime, account_id: str):
         with self.session_factory() as session:
             record = (
                 session.query(EmailRecord)
-                .filter(EmailRecord.id == email_id)
+                .filter(EmailRecord.account_id == account_id, EmailRecord.id == email_id)
                 .one_or_none()
             )
             if record is None:
@@ -108,25 +201,25 @@ class MetadataStore:
             record.indexed_at = indexed_at
             session.commit()
 
-    def mark_indexed_batch(self, email_ids: list[int], indexed_at: datetime):
+    def mark_indexed_batch(self, email_ids: list[int], indexed_at: datetime, account_id: str):
         if not email_ids:
             return
         with self.session_factory() as session:
             (
                 session.query(EmailRecord)
-                .filter(EmailRecord.id.in_(email_ids))
+                .filter(EmailRecord.account_id == account_id, EmailRecord.id.in_(email_ids))
                 .update({"indexed_at": indexed_at}, synchronize_session=False)
             )
             session.commit()
 
-    def delete_emails_by_gmail_message_ids(self, gmail_message_ids: list[str]):
+    def delete_emails_by_gmail_message_ids(self, gmail_message_ids: list[str], account_id: str):
         if not gmail_message_ids:
             return []
 
         with self.session_factory() as session:
             records = (
                 session.query(EmailRecord)
-                .filter(EmailRecord.gmail_message_id.in_(gmail_message_ids))
+                .filter(EmailRecord.account_id == account_id, EmailRecord.gmail_message_id.in_(gmail_message_ids))
                 .all()
             )
             email_ids = [record.id for record in records]
@@ -135,32 +228,33 @@ class MetadataStore:
             session.commit()
             return email_ids
 
-    def get_sync_value(self, key: str):
+    def get_sync_value(self, key: str, account_id: str):
         with self.session_factory() as session:
-            record = session.query(SyncMeta).filter(SyncMeta.key == key).one_or_none()
+            record = session.query(SyncMeta).filter(SyncMeta.account_id == account_id, SyncMeta.key == key).one_or_none()
             if record is None:
                 return None
             return record.value
 
-    def set_sync_value(self, key: str, value: str | None):
+    def set_sync_value(self, key: str, value: str | None, account_id: str):
         with self.session_factory() as session:
-            record = session.query(SyncMeta).filter(SyncMeta.key == key).one_or_none()
+            record = session.query(SyncMeta).filter(SyncMeta.account_id == account_id, SyncMeta.key == key).one_or_none()
             if record is None:
-                record = SyncMeta(key=key)
+                record = SyncMeta(account_id=account_id, key=key)
                 session.add(record)
+            record.account_id = account_id
             record.value = value
             record.last_synced_at = datetime.now(timezone.utc)
             session.commit()
 
-    def delete_sync_value(self, key: str):
+    def delete_sync_value(self, key: str, account_id: str):
         with self.session_factory() as session:
-            record = session.query(SyncMeta).filter(SyncMeta.key == key).one_or_none()
+            record = session.query(SyncMeta).filter(SyncMeta.account_id == account_id, SyncMeta.key == key).one_or_none()
             if record is None:
                 return
             session.delete(record)
             session.commit()
 
-    def keyword_search(self, query: str, limit: int = 8, scan_limit: int | None = None, category_filters: list[str] | None = None, search_filters: dict | None = None):
+    def keyword_search(self, query: str, account_id: str, limit: int = 8, scan_limit: int | None = None, category_filters: list[str] | None = None, search_filters: dict | None = None):
         terms = self._terms(query)
         if not terms:
             return []
@@ -179,7 +273,11 @@ class MetadataStore:
             params: dict[str, object] = {
                 "fts_query": fts_query,
                 "limit": max(limit * 4, 20),
+                "account_id": account_id,
+                "trash_pattern": '%"TRASH"%',
             }
+            sql += " AND e.account_id = :account_id"
+            sql += " AND (e.raw_payload IS NULL OR e.raw_payload NOT LIKE :trash_pattern)"
             if category_filters:
                 placeholders = []
                 for index, category in enumerate(category_filters):
@@ -261,6 +359,15 @@ class MetadataStore:
             snippet=record.snippet,
             body_text=record.body_text,
             attachment_names=self._parse_attachment_names(record.attachment_names),
+        )
+
+    def _account_to_response(self, record: GmailAccount):
+        return GmailAccountResponse(
+            account_id=record.account_id,
+            email_address=record.email_address,
+            display_name=record.display_name,
+            token_path=record.token_path,
+            is_active=bool(record.is_active),
         )
 
     def _parse_attachment_names(self, attachment_names: str | None):
@@ -454,3 +561,11 @@ class MetadataStore:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
+
+    def _exclude_trashed_query(self, query):
+        return query.filter(
+            or_(
+                EmailRecord.raw_payload.is_(None),
+                ~EmailRecord.raw_payload.like('%"TRASH"%'),
+            )
+        )

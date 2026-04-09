@@ -191,6 +191,9 @@ function AnswerContent({ text }) {
 
 function App() {
   const [health, setHealth] = useState(null)
+  const [accounts, setAccounts] = useState([])
+  const [selectedAccountId, setSelectedAccountId] = useState('')
+  const [accountLoading, setAccountLoading] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [categoryFilters, setCategoryFilters] = useState([])
   const [senderFilter, setSenderFilter] = useState('')
@@ -214,7 +217,13 @@ function App() {
   })
   const [syncStatusLoaded, setSyncStatusLoaded] = useState(false)
 
+  const visibleAccounts = accounts.filter((account) => (
+    account.account_id !== 'local_default' || Boolean(account.email_address)
+  ))
   const isSyncRunning = syncing || syncStatus.state === 'running'
+  const selectedAccount = visibleAccounts.find((account) => account.account_id === selectedAccountId)
+    || accounts.find((account) => account.account_id === selectedAccountId)
+    || null
   const recentQuestions = chatHistory
     .filter((message) => message.role === 'user')
     .slice(-3)
@@ -245,16 +254,91 @@ function App() {
     setHealth(response.data)
   }
 
+  const loadAccounts = async () => {
+    const response = await api.get('/api/accounts')
+    const nextAccounts = response.data || []
+    setAccounts(nextAccounts)
+
+    const nextVisibleAccounts = nextAccounts.filter((account) => (
+      account.account_id !== 'local_default' || Boolean(account.email_address)
+    ))
+
+    const activeAccount = nextVisibleAccounts.find((account) => account.is_active)
+    if (activeAccount) {
+      setSelectedAccountId((current) => current || activeAccount.account_id)
+      return activeAccount.account_id
+    }
+
+    if (nextVisibleAccounts.length > 0) {
+      setSelectedAccountId((current) => current || nextVisibleAccounts[0].account_id)
+      return nextVisibleAccounts[0].account_id
+    }
+
+    setSelectedAccountId('')
+    return ''
+  }
+
   useEffect(() => {
     loadHealth().catch(() => {})
+    loadAccounts().catch(() => {})
     api.get('/api/sync-status')
       .then((response) => setSyncStatus(response.data))
       .catch(() => {})
       .finally(() => setSyncStatusLoaded(true))
   }, [])
 
+  const handleSelectAccount = async (nextAccountId) => {
+    setSelectedAccountId(nextAccountId)
+    setAccountLoading(true)
+    setError('')
+    setStatus('')
+
+    try {
+      await api.post('/api/accounts/select', {
+        account_id: nextAccountId,
+        make_active: true,
+      })
+      await Promise.all([
+        loadAccounts(),
+        loadHealth(),
+      ])
+      setStatus('Switched Gmail account.')
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message || 'Failed to switch account.'
+      setError(message)
+    } finally {
+      setAccountLoading(false)
+    }
+  }
+
+  const handleConnectAccount = async () => {
+    setAccountLoading(true)
+    setError('')
+    setStatus('Opening Gmail OAuth...')
+
+    try {
+      const response = await api.post('/api/accounts/connect', { make_active: true })
+      await Promise.all([
+        loadAccounts(),
+        loadHealth(),
+      ])
+      setSelectedAccountId(response.data.account_id)
+      setStatus(`Connected Gmail account: ${response.data.email_address || response.data.account_id}`)
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message || 'Failed to connect Gmail account.'
+      setError(message)
+    } finally {
+      setAccountLoading(false)
+    }
+  }
+
   const handleSync = async () => {
     if (isSyncRunning) {
+      return
+    }
+
+    if (!selectedAccountId) {
+      setError('Connect or select a Gmail account first.')
       return
     }
 
@@ -273,12 +357,15 @@ function App() {
     })
 
     try {
-      const response = await api.post('/api/sync', { count: 10 })
+      const response = await api.post('/api/sync', {
+        count: 10,
+        account_id: selectedAccountId,
+      })
       setStatus(response.data.message)
       const syncStatusResponse = await api.get('/api/sync-status')
       setSyncStatus(syncStatusResponse.data)
       setSyncStatusLoaded(true)
-      await loadHealth()
+      await Promise.all([loadHealth(), loadAccounts()])
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Sync failed.')
       api.get('/api/sync-status')
@@ -299,6 +386,11 @@ function App() {
       return
     }
 
+    if (!selectedAccountId) {
+      setError('Connect or select a Gmail account first.')
+      return
+    }
+
     const question = chatInput.trim()
     setChatHistory((current) => [...current, { role: 'user', text: question }])
     setChatInput('')
@@ -309,6 +401,7 @@ function App() {
       const response = await api.post('/api/chat', {
         question,
         top_k: 4,
+        account_id: selectedAccountId,
         category_filters: categoryFilters,
         search_filters: {
           sender: senderFilter,
@@ -376,6 +469,11 @@ function App() {
         <div>
           <p className="section-kicker">Chat Agent</p>
           <h1 className="app-title">Ask Your Inbox</h1>
+          <p className="header-subtitle">
+            {selectedAccount
+              ? `Active account: ${selectedAccount.email_address || selectedAccount.account_id}`
+              : 'No Gmail account selected'}
+          </p>
         </div>
         <div className="header-pills">
           <div className="hero-chip">
@@ -400,6 +498,43 @@ function App() {
           </div>
 
           <div className="chat-controls">
+            <div className="account-toolbar">
+              <div className="filter-toolbar-copy">
+                <p className="section-kicker">Connected Gmail</p>
+                <p className="filter-toolbar-note">
+                  {selectedAccount
+                    ? `Searching mailbox for ${selectedAccount.email_address || selectedAccount.account_id}.`
+                    : 'Connect at least one Gmail account to sync and search.'}
+                </p>
+              </div>
+              <div className="account-toolbar-actions">
+                <label className="structured-filter-field account-select-field">
+                  <span>Active Account</span>
+                  <select
+                    value={selectedAccountId}
+                    onChange={(event) => handleSelectAccount(event.target.value)}
+                    disabled={accountLoading || !visibleAccounts.length}
+                  >
+                    {visibleAccounts.length === 0 ? (
+                      <option value="">No accounts connected</option>
+                    ) : null}
+                    {visibleAccounts.map((account) => (
+                      <option key={account.account_id} value={account.account_id}>
+                        {account.email_address || account.account_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleConnectAccount}
+                  disabled={accountLoading}
+                >
+                  {accountLoading ? 'Working...' : 'Add account'}
+                </button>
+              </div>
+            </div>
             <div className="filter-toolbar">
               <div className="filter-toolbar-copy">
                 <p className="section-kicker">Mailbox Tabs</p>

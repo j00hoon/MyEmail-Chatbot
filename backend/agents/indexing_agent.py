@@ -19,7 +19,7 @@ class IndexingAgent:
     metadata_store: MetadataStore
     vector_store: VectorStore
 
-    def run(self, email_ids: list[int] | None = None, progress_callback=None, only_unindexed: bool = False):
+    def run(self, email_ids: list[int] | None = None, progress_callback=None, only_unindexed: bool = False, account_id: str = "local_default"):
         if email_ids is not None and not email_ids:
             if progress_callback is not None:
                 progress_callback(
@@ -31,9 +31,9 @@ class IndexingAgent:
             return IndexingResult(indexed_count=0, saved_count=0)
 
         if only_unindexed:
-            emails = self.metadata_store.get_unindexed_emails_for_indexing()
+            emails = self.metadata_store.get_unindexed_emails_for_indexing(account_id=account_id)
         else:
-            emails = self.metadata_store.get_emails_for_indexing(email_ids=email_ids)
+            emails = self.metadata_store.get_emails_for_indexing(account_id=account_id, email_ids=email_ids)
         parser = TextParsingSkill()
         chunker = TextChunkingSkill()
         embedder = EmbeddingGenerationSkill()
@@ -65,6 +65,7 @@ class IndexingAgent:
                             "id": f"{email.id}:{index}",
                             "metadata": {
                                 "email_id": email.id,
+                                "account_id": account_id,
                                 "gmail_message_id": email.gmail_message_id,
                                 "subject": email.subject,
                                 "sender": email.sender,
@@ -89,10 +90,11 @@ class IndexingAgent:
                     }
                 )
 
-            self.vector_store.replace_for_email_ids(batch_ids, vector_records)
+            self.vector_store.replace_for_email_ids(account_id=account_id, email_ids=batch_ids, new_records=vector_records)
             self.metadata_store.mark_indexed_batch(
                 batch_ids,
                 indexed_at=datetime.now(timezone.utc),
+                account_id=account_id,
             )
             indexed_count += len(email_batch)
             if progress_callback is not None:
